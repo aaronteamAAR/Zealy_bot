@@ -2,6 +2,8 @@ import hashlib
 import asyncio
 import re
 import time
+import os
+from dotenv import load_dotenv
 import sys
 from datetime import datetime
 from telegram import Bot, Update
@@ -21,9 +23,11 @@ from selenium.common.exceptions import (
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+load_dotenv() 
+
 # Configuration - Use environment variables in production!
-TELEGRAM_BOT_TOKEN = '8186846838:AAFG8rjw_Rf29TX362gfa_E5zqkEswecVPE'
-CHAT_ID = '6392728034'
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+CHAT_ID = os.getenv('CHAT_ID')
 CHECK_INTERVAL = 120  # Seconds
 MAX_URLS = 10
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
