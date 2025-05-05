@@ -58,7 +58,8 @@ async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_chrome_options():
     """Configure Chrome options with version-aware settings"""
     options = Options()
-    
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
     # Headless mode configuration
     try:
         options.add_argument("--headless=new")
@@ -70,6 +71,7 @@ def get_chrome_options():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--log-level=3")
+    options.binary_location = "/usr/bin/chromium-browser" 
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     return options
 
