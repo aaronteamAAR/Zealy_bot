@@ -18,6 +18,7 @@ from telegram.ext import (
     filters
 )
 from telegram.error import TelegramError, NetworkError
+from webdriver_manager.core.os_manager import ChromeType, get_browser_version_from_os
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -77,8 +78,14 @@ def get_chrome_options():
 def get_content_hash(url):
     """Faster verification with strict timeout"""
     try:
-        # Use ChromeDriverManager with specific version
-        service = Service(ChromeDriverManager().install())
+        # Get Chrome version and setup driver
+        chrome_version = get_browser_version_from_os(ChromeType.GOOGLE)
+        driver_path = ChromeDriverManager(version=chrome_version).install()
+        
+        # Set execute permissions
+        os.chmod(driver_path, 0o755)  # Critical for Linux
+        
+        service = Service(driver_path)
         driver = webdriver.Chrome(
             service=service,
             options=get_chrome_options()
