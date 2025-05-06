@@ -60,7 +60,6 @@ def kill_previous_instances():
             continue
 
 def get_chrome_options():
-    """Chrome configuration with updated options"""
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
@@ -69,10 +68,8 @@ def get_chrome_options():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--log-level=3")
     
-    if sys.platform.startswith('linux'):
-        options.binary_location = "/usr/bin/chromium-browser"
-    elif sys.platform == "win32":
-        options.binary_location = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    # Update binary location
+    options.binary_location = "/usr/bin/google-chrome-stable"  # Changed path
     
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     return options
@@ -80,12 +77,13 @@ def get_chrome_options():
 def get_content_hash(url):
     """Faster verification with strict timeout"""
     try:
+        # Use ChromeDriverManager with specific version
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(
-            service=service, 
+            service=service,
             options=get_chrome_options()
         )
-        driver.set_page_load_timeout(15)  # Strict 15-second timeout
+        driver.set_page_load_timeout(15)
         
         # Main content check
         driver.get(url)
