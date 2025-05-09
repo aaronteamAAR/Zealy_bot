@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list && \
     apt-get update && \
     apt-get install -y google-chrome-stable && \
-    ln -s /usr/bin/google-chrome-stable /usr/bin/chrome && \  # Critical symlink
+    ln -s /usr/bin/google-chrome-stable /usr/bin/chrome && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
