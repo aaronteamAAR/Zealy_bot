@@ -18,7 +18,8 @@ from telegram.ext import (
     filters
 )
 from telegram.error import TelegramError, NetworkError
-from webdriver_manager.core.os_manager import ChromeType, get_browser_version_from_os
+from webdriver_manager.core.os_manager import ChromeType
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -30,7 +31,6 @@ from selenium.common.exceptions import (
     TimeoutException
 )
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 load_dotenv()
 
@@ -63,34 +63,31 @@ def kill_previous_instances():
 def get_chrome_options():
     options = Options()
     options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--log-level=3")
-    
-    # Update binary location
-    options.binary_location = "/usr/bin/google-chrome-stable"  # Changed path
-    
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.binary_location = "/usr/bin/chrome"
     return options
 
 def get_content_hash(url):
-    """Faster verification with strict timeout"""
+    """Robust content verification with error handling"""
+    driver = None
     try:
-        # Get Chrome version and setup driver
-        chrome_version = get_browser_version_from_os(ChromeType.GOOGLE)
-        driver_path = ChromeDriverManager(version=chrome_version).install()
+        # Verify Chrome exists
+        if not os.path.exists("/usr/bin/chrome"):
+            raise FileNotFoundError("Chrome missing! Rebuild Docker image")
         
-        # Set execute permissions
-        os.chmod(driver_path, 0o755)  # Critical for Linux
+        # Install matching driver
+        driver_path = ChromeDriverManager(chrome_type=ChromeType.CHROME).install()
+        os.chmod(driver_path, 0o755)  # Set execute permissions
         
-        service = Service(driver_path)
+        service = Service(executable_path=driver_path)
         driver = webdriver.Chrome(
             service=service,
             options=get_chrome_options()
         )
-        driver.set_page_load_timeout(15)
+        driver.set_page_load_timeout(25)
         
         # Main content check
         driver.get(url)
