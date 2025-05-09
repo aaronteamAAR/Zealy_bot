@@ -1,0 +1,6 @@
+services:
+  - type: background-worker
+    name: zealy-bot
+    dockerfilePath: ./Dockerfile
+    buildCommand: docker build --no-cache -t zealybot .
+    startCommand: docker run --restart unless-stopped zealybot
