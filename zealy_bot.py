@@ -79,7 +79,7 @@ def get_content_hash(url):
             raise FileNotFoundError("Chrome missing! Rebuild Docker image")
         
         # Install matching driver
-        driver_path = ChromeDriverManager(chrome_type=ChromeType.CHROME).install()
+        driver_path = ChromeDriverManager().install() 
         os.chmod(driver_path, 0o755)  # Set execute permissions
         
         service = Service(executable_path=driver_path)
