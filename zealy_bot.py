@@ -1,10 +1,13 @@
 import hashlib
 import asyncio
 import re
+import shutil
 import time
 import os
 import psutil
+import stat
 from dotenv import load_dotenv
+import chromedriver_autoinstaller
 import concurrent.futures
 import sys
 from datetime import datetime
@@ -18,8 +21,7 @@ from telegram.ext import (
     filters
 )
 from telegram.error import TelegramError, NetworkError
-from webdriver_manager.core.os_manager import ChromeType
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -31,9 +33,10 @@ from selenium.common.exceptions import (
     TimeoutException
 )
 from selenium.webdriver.chrome.service import Service
+import platform
 
 load_dotenv()
-
+chromedriver_autoinstaller.install() 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = int(os.getenv('CHAT_ID'))  # Convert to integer
@@ -48,7 +51,6 @@ is_monitoring = False
 SECURITY_LOG = "activity.log"
 
 def kill_previous_instances():
-    """Proper process killing with PID comparison"""
     current_pid = os.getpid()
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
@@ -67,35 +69,28 @@ def get_chrome_options():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.binary_location = "/usr/bin/chrome"
+
+    # Hardcoded known good path for Chrome in Docker
+    chrome_path = "/usr/bin/chromium"
+    print("🕵️ Forcing Chrome binary path:", chrome_path)
+
+    if not os.path.exists(chrome_path):
+        raise FileNotFoundError(f"Chrome missing at expected path: {chrome_path}")
+
+    options.binary_location = chrome_path
     return options
 
 def get_content_hash(url):
-    """Robust content verification with error handling"""
     driver = None
     try:
-        # Verify Chrome exists
-        if not os.path.exists("/usr/bin/chrome"):
-            raise FileNotFoundError("Chrome missing! Rebuild Docker image")
-        
-        # Install matching driver
-        driver_path = ChromeDriverManager().install() 
-        os.chmod(driver_path, 0o755)  # Set execute permissions
-        
-        service = Service(executable_path=driver_path)
-        driver = webdriver.Chrome(
-            service=service,
-            options=get_chrome_options()
-        )
-        driver.set_page_load_timeout(25)
-        
-        # Main content check
+        options = get_chrome_options()
+        service = Service()
+        driver = webdriver.Chrome(service=service, options=options)
         driver.get(url)
-        WebDriverWait(driver, 10).until(
+        print(driver.page_source[:1000]) 
+        WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ZEALY_CONTAINER_SELECTOR))
         )
-        
-        # Content processing
         container = driver.find_element(By.CSS_SELECTOR, ZEALY_CONTAINER_SELECTOR)
         content = container.text
         clean_content = re.sub(
@@ -104,7 +99,6 @@ def get_content_hash(url):
             content
         )
         return hashlib.sha256(clean_content.strip().encode()).hexdigest()
-        
     except Exception as e:
         print(f"Content check error: {str(e)}")
         return None
@@ -115,13 +109,11 @@ def get_content_hash(url):
             pass
 
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Security middleware"""
     if update.effective_chat.id != CHAT_ID:
         await update.message.reply_text("🚫 Unauthorized access!")
         raise ApplicationHandlerStop
 
 async def send_notification(bot, message):
-    """Notification with security logging"""
     retries = 0
     while retries < 3:
         try:
@@ -135,24 +127,19 @@ async def send_notification(bot, message):
     return False
 
 async def check_urls(bot):
-    """URL checking with failure tracking"""
     global monitored_urls
     current_time = time.time()
-    
     for url in list(monitored_urls.keys()):
         try:
             start_time = time.time()
             current_hash = get_content_hash(url)
-            
             if not current_hash:
                 monitored_urls[url]['failures'] += 1
                 if monitored_urls[url]['failures'] > 3:
                     del monitored_urls[url]
                     await send_notification(bot, f"🔴 Removed from monitoring: {url}")
                 continue
-            
             monitored_urls[url]['failures'] = 0
-            
             if monitored_urls[url]['hash'] != current_hash:
                 if current_time - monitored_urls[url].get('last_notified', 0) > 300:
                     success = await send_notification(
@@ -163,9 +150,7 @@ async def check_urls(bot):
                             'hash': current_hash,
                             'last_checked': current_time
                         })
-            
             monitored_urls[url]['last_checked'] = current_time
-            
         except Exception as e:
             print(f"⚠️ Error processing {url}: {str(e)}")
 
@@ -190,45 +175,31 @@ async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(message)[:4000])
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Async version with immediate feedback"""
     if update.effective_chat.id != CHAT_ID:
         return
-    
     try:
         url = context.args[0].lower()
-        
-        # Immediate format check
         if not re.match(r'^https://(www\.)?zealy\.io/cw/[\w/-]+$', url):
             await update.message.reply_text("❌ Invalid Zealy URL format")
             return
-            
         if url in monitored_urls:
             await update.message.reply_text("ℹ️ URL already monitored")
             return
-            
-        # Send immediate acknowledgement
         processing_msg = await update.message.reply_text("⏳ Verifying URL...")
-        
-        # Run Chrome in executor to avoid blocking
         loop = asyncio.get_event_loop()
         initial_hash = await loop.run_in_executor(None, get_content_hash, url)
-        
         if not initial_hash:
             await processing_msg.edit_text("❌ Failed to verify URL content")
             return
-            
         monitored_urls[url] = {
             'hash': initial_hash,
             'last_notified': 0,
             'last_checked': time.time(),
             'failures': 0
         }
-        
         await processing_msg.edit_text(
-            f"✅ Added: {url}\n"
-            f"📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
+            f"✅ Added: {url}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
         )
-        
     except (IndexError, ValueError):
         await update.message.reply_text("❌ Usage: /add <zealy-url>")
     except Exception as e:
@@ -262,7 +233,6 @@ async def start_monitoring(application: Application):
     bot = application.bot
     is_monitoring = True
     await send_notification(bot, "🔔 Monitoring started!")
-    
     while is_monitoring:
         try:
             start_time = time.time()
@@ -275,25 +245,28 @@ async def start_monitoring(application: Application):
 def main():
     print(f"🚀 Starting bot at {datetime.now()}")
     kill_previous_instances()
-    
-    # Create thread pool for Chrome operations
+
+    if platform.system() == "Linux":
+        if not os.path.exists("/usr/bin/google-chrome-stable"):
+            print("❌ Chrome not found at /usr/bin/google-chrome-stable")
+            exit(1)
+        if not os.path.exists("/usr/bin/chromedriver"):
+            print("❌ Chromedriver not found at /usr/bin/chromedriver")
+            exit(1)
+
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-    
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
+
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
-        .concurrent_updates(True)  # Enable concurrent updates
+        .concurrent_updates(True)
         .post_init(lambda app: app.bot.delete_webhook(drop_pending_updates=True))
         .build()
     )
-    
-    # Security middleware
+
     application.add_handler(MessageHandler(filters.ALL, auth_middleware), group=-1)
-    
-    # Command handlers
     handlers = [
         CommandHandler("start", start),
         CommandHandler("add", add_url),
@@ -302,10 +275,9 @@ def main():
         CommandHandler("stop", stop_monitoring),
         CommandHandler("purge", purge_urls)
     ]
-    
     for handler in handlers:
         application.add_handler(handler)
-    
+
     try:
         application.run_polling()
     except KeyboardInterrupt:
