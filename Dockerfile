@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install Chromium and its dependencies
+# Install Chromium and Chromedriver from Debian repos
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
@@ -21,8 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# Set default Chromium binary path explicitly
 ENV CHROME_BIN=/usr/bin/chromium
-ENV PATH="${CHROME_BIN}:${PATH}"
+ENV CHROMEDRIVER_BIN=/usr/lib/chromium/chromedriver
+ENV PATH="${CHROME_BIN}:${CHROMEDRIVER_BIN}:${PATH}"
 
 WORKDIR /app
 COPY requirements.txt .

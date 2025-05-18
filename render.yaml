@@ -1,6 +1,15 @@
 services:
-  - type: background-worker
-    name: zealy-bot
-    dockerfilePath: ./Dockerfile
-    buildCommand: docker build --no-cache -t zealybot .
-    startCommand: docker run --restart unless-stopped zealybot
+  - type: worker
+    name: zealy-monitor-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python zealy_bot.py
+    plan: starter
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # This will be manually set in Render dashboard
+      - key: CHAT_ID
+        sync: false # This will be manually set in Render dashboard
+      - key: IS_RENDER
+        value: true # Flag to tell the app it's running on Render
+    autoDeploy: true
