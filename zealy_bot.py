@@ -94,7 +94,7 @@ IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
 
 if IS_RENDER:
     # Render.com specific paths
-    CHROME_PATH = '/usr/bin/google-chrome-stable'  # Render uses Chrome, not Chromium
+    CHROME_PATH = '/usr/bin/chromium'  # Render uses Chrome, not Chromium
     CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
 elif platform.system() == "Windows":
     # Default Windows paths
