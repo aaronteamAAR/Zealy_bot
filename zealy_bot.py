@@ -34,7 +34,8 @@ try:
     from selenium.common.exceptions import (
         StaleElementReferenceException,
         WebDriverException,
-        TimeoutException
+        TimeoutException,
+        NoSuchElementException
     )
     from selenium.webdriver.chrome.service import Service
 except ImportError as e:
@@ -84,17 +85,17 @@ except Exception as e:
     print("We'll try to use existing Chrome/ChromeDriver")
 
 # Configuration
-CHECK_INTERVAL = 120
-MAX_URLS = 10
+CHECK_INTERVAL = 45
+MAX_URLS = 20
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 30
 
 # Set appropriate paths based on environment
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
 
 if IS_RENDER:
     # Render.com specific paths
-    CHROME_PATH = '/usr/bin/chromium'  # Render uses Chrome, not Chromium
+    CHROME_PATH = '/usr/bin/chromium'
     CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
 elif platform.system() == "Windows":
     # Default Windows paths
@@ -136,6 +137,12 @@ def get_chrome_options():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-features=VizDisplayCompositor")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")
+    options.add_argument("--disable-javascript")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     # Add special options for Render.com
     if IS_RENDER:
@@ -143,7 +150,8 @@ def get_chrome_options():
         options.add_argument("--disable-dev-tools")
         options.add_argument("--no-zygote")
         options.add_argument("--single-process")
-        options.add_argument("--disable-extensions")
+        options.add_argument("--memory-pressure-off")
+        options.add_argument("--max_old_space_size=4096")
     
     # Use environment variables for paths
     print(f"🕵️ Using Chrome binary path: {CHROME_PATH}")
@@ -174,57 +182,107 @@ def get_chrome_options():
 
 def get_content_hash(url):
     driver = None
-    try:
-        print(f"🌐 Initializing driver for URL: {url}")
-        options = get_chrome_options()
-        
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
         try:
-            if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
-                # On Render or if we can't find chromedriver, let Selenium find it automatically
-                print("Using default ChromeDriver (auto-detection)")
-                driver = webdriver.Chrome(options=options)
-            else:
-                # Use specified path when available
-                print(f"Using specified ChromeDriver path: {CHROMEDRIVER_PATH}")
-                service = Service(executable_path=CHROMEDRIVER_PATH)
-                driver = webdriver.Chrome(service=service, options=options)
+            print(f"🌐 Initializing driver for URL: {url} (Attempt {retry_count + 1}/{max_retries})")
+            options = get_chrome_options()
+            
+            try:
+                if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
+                    # On Render or if we can't find chromedriver, let Selenium find it automatically
+                    print("Using default ChromeDriver (auto-detection)")
+                    driver = webdriver.Chrome(options=options)
+                else:
+                    # Use specified path when available
+                    print(f"Using specified ChromeDriver path: {CHROMEDRIVER_PATH}")
+                    service = Service(executable_path=CHROMEDRIVER_PATH)
+                    driver = webdriver.Chrome(service=service, options=options)
+                    
+                print(f"🌐 Loading URL: {url}")
+                driver.set_page_load_timeout(REQUEST_TIMEOUT)
+                driver.get(url)
                 
-            print(f"🌐 Loading URL: {url}")
-            driver.get(url)
-            
-            print("⏳ Waiting for page elements...")
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ZEALY_CONTAINER_SELECTOR))
-            )
-            
-            container = driver.find_element(By.CSS_SELECTOR, ZEALY_CONTAINER_SELECTOR)
-            content = container.text
-            
-            print(f"📄 Content retrieved, length: {len(content)} chars")
-            clean_content = re.sub(
-                r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', 
-                '', 
-                content
-            )
-            content_hash = hashlib.sha256(clean_content.strip().encode()).hexdigest()
-            print(f"🔢 Hash generated: {content_hash[:8]}...")
-            return content_hash
-        except TimeoutException:
-            print(f"⚠️ Timeout waiting for page elements on {url}")
-            return None
-        except WebDriverException as e:
-            print(f"⚠️ WebDriver error: {str(e)}")
-            return None
-    except Exception as e:
-        print(f"❌ Content check error: {str(e)}")
-        return None
-    finally:
-        try:
-            if driver:
-                print("🧹 Closing WebDriver")
-                driver.quit()
+                print("⏳ Waiting for page elements...")
+                # Try multiple selectors in case the page structure changes
+                selectors_to_try = [
+                    ZEALY_CONTAINER_SELECTOR,
+                    "div[class*='flex'][class*='flex-col']",
+                    "main",
+                    "body"
+                ]
+                
+                container = None
+                for selector in selectors_to_try:
+                    try:
+                        container = WebDriverWait(driver, 15).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        print(f"✅ Found element with selector: {selector}")
+                        break
+                    except TimeoutException:
+                        print(f"⚠️ Selector {selector} not found, trying next...")
+                        continue
+                
+                if not container:
+                    print("❌ No suitable container found")
+                    return None
+                
+                # Wait a bit more for content to load
+                time.sleep(2)
+                content = container.text
+                
+                if not content or len(content.strip()) < 10:
+                    print(f"⚠️ Content too short or empty: {len(content)} chars")
+                    if retry_count < max_retries - 1:
+                        retry_count += 1
+                        time.sleep(5)  # Wait before retry
+                        continue
+                    return None
+                
+                print(f"📄 Content retrieved, length: {len(content)} chars")
+                clean_content = re.sub(
+                    r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', 
+                    '', 
+                    content
+                )
+                content_hash = hashlib.sha256(clean_content.strip().encode()).hexdigest()
+                print(f"🔢 Hash generated: {content_hash[:8]}...")
+                return content_hash
+                
+            except TimeoutException:
+                print(f"⚠️ Timeout waiting for page elements on {url}")
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    time.sleep(5)
+                    continue
+                return None
+            except WebDriverException as e:
+                print(f"⚠️ WebDriver error: {str(e)}")
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    time.sleep(5)
+                    continue
+                return None
         except Exception as e:
-            print(f"⚠️ Error closing WebDriver: {str(e)}")
+            print(f"❌ Content check error: {str(e)}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(5)
+                continue
+            return None
+        finally:
+            try:
+                if driver:
+                    print("🧹 Closing WebDriver")
+                    driver.quit()
+                    driver = None
+            except Exception as e:
+                print(f"⚠️ Error closing WebDriver: {str(e)}")
+    
+    return None
 
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
@@ -261,12 +319,13 @@ async def check_urls(bot):
             if not current_hash:
                 monitored_urls[url]['failures'] += 1
                 print(f"⚠️ Failed to get hash for {url} - Failure #{monitored_urls[url]['failures']}")
-                if monitored_urls[url]['failures'] > 3:
+                if monitored_urls[url]['failures'] > 5:  # Increased threshold
                     del monitored_urls[url]
                     await send_notification(bot, f"🔴 Removed from monitoring due to repeated failures: {url}")
-                    print(f"🗑️ Removed {url} after 3 failures")
+                    print(f"🗑️ Removed {url} after 5 failures")
                 continue
                 
+            # Reset failure count on successful check
             monitored_urls[url]['failures'] = 0
             if monitored_urls[url]['hash'] != current_hash:
                 print(f"🔔 Change detected for {url}")
@@ -297,6 +356,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🚀 Zealy Monitoring Bot\n\n"
         "Commands:\n"
         "/add <url> - Add monitoring URL\n"
+        "/remove <number> - Remove URL by number\n"
         "/list - Show monitored URLs\n"
         "/run - Start monitoring\n"
         "/stop - Stop monitoring\n"
@@ -310,6 +370,43 @@ async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     message = ["📋 Monitored URLs:"] + [f"{idx}. {url}" for idx, url in enumerate(monitored_urls.keys(), 1)]
     await update.message.reply_text("\n".join(message)[:4000])
+
+async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != CHAT_ID:
+        return
+    
+    if not monitored_urls:
+        await update.message.reply_text("❌ No URLs to remove")
+        return
+        
+    try:
+        if not context.args or not context.args[0]:
+            await update.message.reply_text("❌ Usage: /remove <number>\nUse /list to see URL numbers")
+            return
+            
+        try:
+            url_index = int(context.args[0]) - 1  # Convert to 0-based index
+        except ValueError:
+            await update.message.reply_text("❌ Please provide a valid number")
+            return
+            
+        url_list = list(monitored_urls.keys())
+        
+        if url_index < 0 or url_index >= len(url_list):
+            await update.message.reply_text(f"❌ Invalid number. Use a number between 1 and {len(url_list)}")
+            return
+            
+        url_to_remove = url_list[url_index]
+        del monitored_urls[url_to_remove]
+        
+        await update.message.reply_text(
+            f"✅ Removed: {url_to_remove}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
+        )
+        print(f"🗑️ Manually removed URL: {url_to_remove}")
+        
+    except Exception as e:
+        print(f"⚠️ Error in remove_url: {str(e)}")
+        await update.message.reply_text(f"❌ Error removing URL: {str(e)}")
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
@@ -509,6 +606,7 @@ def main():
         handlers = [
             CommandHandler("start", start),
             CommandHandler("add", add_url),
+            CommandHandler("remove", remove_url),
             CommandHandler("list", list_urls),
             CommandHandler("run", run_monitoring),
             CommandHandler("stop", stop_monitoring),
