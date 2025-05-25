@@ -11,7 +11,7 @@ from datetime import datetime
 import platform
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-````
+
 # First check if required packages are installed
 try:
     import psutil
@@ -93,9 +93,9 @@ except Exception as e:
 CHECK_INTERVAL = 15  # Reduced from 45 seconds
 MAX_URLS = 20
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
-REQUEST_TIMEOUT = 15  # Reduced from 30 seconds
+REQUEST_TIMEOUT = 10  # Reduced from 30 seconds
 MAX_CONCURRENT_CHECKS = 10  # Process multiple URLs simultaneously
-PAGE_LOAD_TIMEOUT = 15  # Faster page load timeout
+PAGE_LOAD_TIMEOUT = 8  # Faster page load timeout
 
 # Set appropriate paths based on environment
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
