@@ -171,11 +171,11 @@ def cleanup_chrome_processes():
         print(f"Warning: Error cleaning Chrome processes: {e}")
 
 def get_chrome_options():
-    """Optimized Chrome options for stability"""
+    """Optimized Chrome options for stability - ENHANCED"""
     options = Options()
     
     # Core stability options
-    options.add_argument("--headless=new")  # Use new headless mode
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -183,68 +183,45 @@ def get_chrome_options():
     options.add_argument("--disable-features=VizDisplayCompositor")
     options.add_argument("--disable-blink-features=AutomationControlled")
     
-    # Memory and performance optimizations
-    options.add_argument("--memory-pressure-off")
+    # Enhanced stability options to prevent disconnections
     options.add_argument("--disable-background-timer-throttling")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--disable-field-trial-config")
-    options.add_argument("--disable-back-forward-cache")
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")
-    options.add_argument("--disable-javascript")  # Disable JS for faster loading
-    
-    # Stability improvements
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-ipc-flooding-protection")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-default-apps")
-    options.add_argument("--disable-popup-blocking")
-    options.add_argument("--disable-prompt-on-repost")
     options.add_argument("--disable-hang-monitor")
-    options.add_argument("--disable-client-side-phishing-detection")
-    options.add_argument("--disable-component-update")
-    options.add_argument("--disable-background-downloads")
-    options.add_argument("--disable-add-to-shelf")
-    options.add_argument("--disable-sync")
+    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--disable-prompt-on-repost")
+    options.add_argument("--disable-component-extensions-with-background-pages")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-extensions-file-access-check")
+    options.add_argument("--disable-extensions-http-throttling")
     
-    # Resource limits
-    options.add_argument("--max-old-space-size=512")  # Reduced memory limit
+    # Memory and resource management
+    options.add_argument("--memory-pressure-off")
+    options.add_argument("--max-old-space-size=512")
     options.add_argument("--max-heap-size=512")
     
-    # User agent
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    # Network and connection stability
+    options.add_argument("--aggressive-cache-discard")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-translate")
     
-    # Add special options for Render.com and cloud environments
-    if IS_RENDER:
+    # Logging and debugging (helps identify issues)
+    options.add_argument("--enable-logging")
+    options.add_argument("--log-level=0")
+    options.add_argument("--v=1")
+    
+    # Set binary location
+    if not IS_RENDER:
+        if os.path.exists(CHROME_PATH):
+            options.binary_location = CHROME_PATH
+    else:
+        options.binary_location = CHROME_PATH
+        # Render-specific options
         options.add_argument("--disable-setuid-sandbox")
         options.add_argument("--disable-dev-tools")
         options.add_argument("--no-zygote")
         options.add_argument("--single-process")
-        options.add_argument("--remote-debugging-port=9222")  # Enable remote debugging
-    
-    # Set binary location
-    if not IS_RENDER:
-        if not os.path.exists(CHROME_PATH):
-            print(f"⚠️ WARNING: Chrome not found at expected path: {CHROME_PATH}")
-            if platform.system() == "Windows":
-                possible_paths = [
-                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-                ]
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        print(f"✅ Found Chrome at: {path}")
-                        options.binary_location = path
-                        break
-        else:
-            options.binary_location = CHROME_PATH
-    else:
-        options.binary_location = CHROME_PATH
         
     return options
 
@@ -315,17 +292,18 @@ async def try_lightweight_check(url):
     return None
 
 def create_driver_with_retry():
-    """Create Chrome driver with retry mechanism"""
+    """Create Chrome driver with retry mechanism - ENHANCED"""
     global current_driver, driver_usage_count
     
     for attempt in range(3):
         try:
             print(f"🌐 Creating Chrome driver (attempt {attempt + 1}/3)")
             
-            # Clean up any existing driver
+            # Clean up any existing driver more thoroughly
             if current_driver:
                 try:
                     current_driver.quit()
+                    time.sleep(1)  # Wait for cleanup
                 except:
                     pass
                 current_driver = None
@@ -333,9 +311,17 @@ def create_driver_with_retry():
             # Clean up Chrome processes if needed
             if attempt > 0:
                 cleanup_chrome_processes()
-                time.sleep(2)
+                time.sleep(3)  # Longer wait after cleanup
             
             options = get_chrome_options()
+            
+            # Add additional stability options
+            options.add_argument("--disable-logging")
+            options.add_argument("--disable-gpu-logging")
+            options.add_argument("--silent")
+            options.add_argument("--log-level=3")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-features=VizDisplayCompositor")
             
             if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
                 driver = webdriver.Chrome(options=options)
@@ -343,30 +329,39 @@ def create_driver_with_retry():
                 service = Service(executable_path=CHROMEDRIVER_PATH)
                 driver = webdriver.Chrome(service=service, options=options)
             
-            # Test the driver
+            # Test the driver more thoroughly
             driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
             driver.implicitly_wait(3)
             
-            # Quick test to ensure driver is working
-            driver.get("data:text/html,<html><body>Test</body></html>")
-            if "Test" in driver.page_source:
+            # Multiple tests to ensure driver is stable
+            test_html = "data:text/html,<html><body><div>Test</div></body></html>"
+            driver.get(test_html)
+            
+            # Test various driver functions
+            _ = driver.title
+            _ = driver.current_url
+            _ = driver.window_handles
+            ready_state = driver.execute_script("return document.readyState")
+            
+            if "Test" in driver.page_source and ready_state == "complete":
                 print("✅ Driver test successful")
                 current_driver = driver
                 driver_usage_count = 0
                 return driver
             else:
+                print("❌ Driver test failed")
                 driver.quit()
                 
         except (SessionNotCreatedException, WebDriverException) as e:
             print(f"❌ Driver creation failed (attempt {attempt + 1}): {str(e)}")
             if attempt == 2:
                 raise
-            time.sleep(3)
+            time.sleep(5)  # Longer wait between attempts
         except Exception as e:
             print(f"❌ Unexpected driver error (attempt {attempt + 1}): {str(e)}")
             if attempt == 2:
                 raise
-            time.sleep(3)
+            time.sleep(5)
     
     raise Exception("Failed to create Chrome driver after 3 attempts")
 
@@ -390,16 +385,39 @@ def get_content_hash_selenium(url):
             else:
                 driver = current_driver
                 
-                # Test if current driver is still alive
+                # Test if current driver is still alive - ENHANCED CHECK
                 try:
-                    driver.current_url  # This will throw if session is dead
-                except (InvalidSessionIdException, WebDriverException):
-                    print("🔄 Current driver session dead, creating new one")
+                    # Multiple checks to ensure session is truly alive
+                    _ = driver.current_url
+                    _ = driver.title  # Additional check
+                    _ = driver.window_handles  # Another session check
+                    
+                    # Quick test navigation to ensure renderer is responsive
+                    driver.execute_script("return document.readyState")
+                    
+                except (InvalidSessionIdException, WebDriverException, Exception) as e:
+                    print(f"🔄 Current driver session dead ({type(e).__name__}), creating new one")
+                    # Clean up the dead driver
+                    try:
+                        current_driver.quit()
+                    except:
+                        pass
+                    current_driver = None
                     driver = create_driver_with_retry()
             
-            # Navigate to URL
-            start_time = time.time()
-            driver.get(url)
+            # Set timeouts for this session
+            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+            driver.implicitly_wait(3)
+            
+            # Navigate to URL with additional error handling
+            try:
+                driver.get(url)
+            except Exception as nav_error:
+                print(f"⚠️ Navigation error: {nav_error}")
+                # If navigation fails, the session might be corrupted
+                if "session deleted" in str(nav_error) or "disconnected" in str(nav_error):
+                    raise InvalidSessionIdException("Session corrupted during navigation")
+                raise
             
             # Wait for content with multiple selectors
             selectors_to_try = [
@@ -414,6 +432,9 @@ def get_content_hash_selenium(url):
             container = None
             for selector in selectors_to_try:
                 try:
+                    # Check if session is still alive before each wait
+                    driver.execute_script("return document.readyState")
+                    
                     container = WebDriverWait(driver, 8).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                     )
@@ -421,10 +442,15 @@ def get_content_hash_selenium(url):
                     break
                 except TimeoutException:
                     continue
+                except (InvalidSessionIdException, WebDriverException) as e:
+                    print(f"🔄 Session lost during wait: {e}")
+                    raise InvalidSessionIdException("Session lost during element wait")
             
             if not container:
                 # Fallback to body content
                 try:
+                    # Final session check
+                    driver.execute_script("return document.readyState")
                     container = driver.find_element(By.TAG_NAME, "body")
                 except NoSuchElementException:
                     print(f"❌ No content found for {url}")
@@ -447,14 +473,35 @@ def get_content_hash_selenium(url):
         except InvalidSessionIdException as e:
             print(f"🔄 Invalid session for {url}: {str(e)}")
             bot_stats['selenium_errors'] += 1
-            current_driver = None  # Force new driver creation
+            
+            # Force cleanup of current driver
+            if current_driver:
+                try:
+                    current_driver.quit()
+                except:
+                    pass
+                current_driver = None
+                driver_usage_count = 0
+            
+            # Clean up any orphaned Chrome processes
+            cleanup_chrome_processes()
+            
             if retry == MAX_SELENIUM_RETRIES - 1:
                 return None
-            time.sleep(2)
+            time.sleep(3)  # Longer wait after session errors
             
         except (TimeoutException, WebDriverException) as e:
             print(f"⚠️ Selenium error for {url} (retry {retry + 1}): {str(e)}")
             bot_stats['selenium_errors'] += 1
+            
+            # Check if this is a session-related error
+            error_str = str(e).lower()
+            if any(term in error_str for term in ['session deleted', 'disconnected', 'renderer']):
+                print(f"🔄 Session-related error detected, forcing driver recreation")
+                current_driver = None
+                cleanup_chrome_processes()
+                time.sleep(3)
+            
             if retry == MAX_SELENIUM_RETRIES - 1:
                 return None
             time.sleep(3)
@@ -462,6 +509,14 @@ def get_content_hash_selenium(url):
         except Exception as e:
             print(f"❌ Unexpected Selenium error for {url}: {str(e)}")
             bot_stats['selenium_errors'] += 1
+            
+            # Check if this is a session-related error
+            error_str = str(e).lower()
+            if any(term in error_str for term in ['session deleted', 'disconnected', 'renderer']):
+                print(f"🔄 Unexpected session error, forcing cleanup")
+                current_driver = None
+                cleanup_chrome_processes()
+            
             if retry == MAX_SELENIUM_RETRIES - 1:
                 return None
             time.sleep(2)
