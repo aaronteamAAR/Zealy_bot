@@ -39,7 +39,9 @@ try:
         StaleElementReferenceException,
         WebDriverException,
         TimeoutException,
-        NoSuchElementException
+        NoSuchElementException,
+        InvalidSessionIdException,
+        SessionNotCreatedException
     )
     from selenium.webdriver.chrome.service import Service
     from bs4 import BeautifulSoup
@@ -89,13 +91,25 @@ except Exception as e:
     print(f"Warning: ChromeDriver auto-installation failed: {e}")
     print("We'll try to use existing Chrome/ChromeDriver")
 
-# Configuration - Optimized for speed
-CHECK_INTERVAL = 15  # Reduced from 45 seconds
-MAX_URLS = 20
+# Configuration - Optimized for stability
+CHECK_INTERVAL = 20  # Slightly increased for stability
+MAX_URLS = 15  # Reduced to prevent resource exhaustion
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
-REQUEST_TIMEOUT = 10  # Reduced from 30 seconds
-MAX_CONCURRENT_CHECKS = 10  # Process multiple URLs simultaneously
-PAGE_LOAD_TIMEOUT = 8  # Faster page load timeout
+REQUEST_TIMEOUT = 15  # Increased for better reliability
+MAX_CONCURRENT_CHECKS = 5  # Reduced for stability
+PAGE_LOAD_TIMEOUT = 12  # Increased timeout
+MAX_SELENIUM_RETRIES = 2  # Retry failed selenium attempts
+DRIVER_REUSE_LIMIT = 10  # Recreate driver after N uses to prevent memory leaks
+
+# Global bot statistics
+bot_stats = {
+    'start_time': None,
+    'total_checks': 0,
+    'total_changes': 0,
+    'selenium_errors': 0,
+    'http_success': 0,
+    'selenium_success': 0
+}
 
 # Set appropriate paths based on environment
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
@@ -124,6 +138,10 @@ SECURITY_LOG = "activity.log"
 # Thread pool for concurrent operations
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHECKS)
 
+# Driver management
+driver_usage_count = 0
+current_driver = None
+
 def kill_previous_instances():
     current_pid = os.getpid()
     try:
@@ -139,44 +157,80 @@ def kill_previous_instances():
     except Exception as e:
         print(f"Warning: Error checking previous instances: {e}")
 
+def cleanup_chrome_processes():
+    """Kill any orphaned Chrome processes"""
+    try:
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if 'chrome' in proc.info['name'].lower() or 'chromium' in proc.info['name'].lower():
+                    proc.kill()
+                    print(f"🧹 Cleaned up Chrome process: {proc.info['pid']}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        print(f"Warning: Error cleaning Chrome processes: {e}")
+
 def get_chrome_options():
-    """Optimized Chrome options for faster performance - Only disable images to be safe"""
+    """Optimized Chrome options for stability"""
     options = Options()
-    options.add_argument("--headless=new")
+    
+    # Core stability options
+    options.add_argument("--headless=new")  # Use new headless mode
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,720")  # Smaller window
+    options.add_argument("--window-size=1280,720")
     options.add_argument("--disable-features=VizDisplayCompositor")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")  # Only disable images - keep JS and CSS for safety
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-ipc-flooding-protection")
+    
+    # Memory and performance optimizations
+    options.add_argument("--memory-pressure-off")
     options.add_argument("--disable-background-timer-throttling")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
     options.add_argument("--disable-field-trial-config")
     options.add_argument("--disable-back-forward-cache")
     options.add_argument("--disable-background-networking")
-    options.add_argument("--memory-pressure-off")
-    options.add_argument("--max_old_space_size=2048")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")
+    options.add_argument("--disable-javascript")  # Disable JS for faster loading
+    
+    # Stability improvements
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=TranslateUI")
+    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-prompt-on-repost")
+    options.add_argument("--disable-hang-monitor")
+    options.add_argument("--disable-client-side-phishing-detection")
+    options.add_argument("--disable-component-update")
+    options.add_argument("--disable-background-downloads")
+    options.add_argument("--disable-add-to-shelf")
+    options.add_argument("--disable-sync")
+    
+    # Resource limits
+    options.add_argument("--max-old-space-size=512")  # Reduced memory limit
+    options.add_argument("--max-heap-size=512")
+    
+    # User agent
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
-    # Add special options for Render.com
+    # Add special options for Render.com and cloud environments
     if IS_RENDER:
         options.add_argument("--disable-setuid-sandbox")
         options.add_argument("--disable-dev-tools")
         options.add_argument("--no-zygote")
         options.add_argument("--single-process")
+        options.add_argument("--remote-debugging-port=9222")  # Enable remote debugging
     
-    # Use environment variables for paths
+    # Set binary location
     if not IS_RENDER:
         if not os.path.exists(CHROME_PATH):
             print(f"⚠️ WARNING: Chrome not found at expected path: {CHROME_PATH}")
-            # Try to locate Chrome/Chromium
             if platform.system() == "Windows":
                 possible_paths = [
                     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -195,114 +249,246 @@ def get_chrome_options():
     return options
 
 async def try_lightweight_check(url):
-    """Try to get content using lightweight HTTP request first"""
+    """Enhanced lightweight HTTP request with better error handling"""
     try:
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        timeout = aiohttp.ClientTimeout(total=8)
+        connector = aiohttp.TCPConnector(
+            limit=10,
+            limit_per_host=5,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+        )
+        
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Cache-Control': 'max-age=0'
             }
             
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, allow_redirects=True) as response:
                 if response.status == 200:
                     content = await response.text()
-                    # Use BeautifulSoup for faster parsing
                     soup = BeautifulSoup(content, 'html.parser')
                     
-                    # Try to find the main content
-                    container = soup.select_one(ZEALY_CONTAINER_SELECTOR)
-                    if not container:
-                        # Fallback selectors
-                        container = soup.select_one("div[class*='flex'][class*='flex-col']") or soup.select_one("main") or soup.select_one("body")
+                    # Try multiple selectors
+                    selectors = [
+                        ZEALY_CONTAINER_SELECTOR,
+                        "div[class*='flex'][class*='flex-col']",
+                        "div[class*='questboard']",
+                        "main",
+                        "div[id*='content']",
+                        "body"
+                    ]
+                    
+                    container = None
+                    for selector in selectors:
+                        container = soup.select_one(selector)
+                        if container:
+                            break
                     
                     if container:
-                        text_content = container.get_text(strip=True)
-                        if len(text_content) > 10:
-                            print(f"✅ Lightweight check successful for {url}")
+                        text_content = container.get_text(separator=' ', strip=True)
+                        if len(text_content) > 20:  # Require minimum content
+                            print(f"✅ HTTP success for {url} ({len(text_content)} chars)")
+                            bot_stats['http_success'] += 1
                             return text_content
+                        
+                elif response.status in [403, 429]:
+                    print(f"🚫 HTTP {response.status} for {url} - may need Selenium")
+                    return None
+                else:
+                    print(f"⚠️ HTTP {response.status} for {url}")
+                    
+    except asyncio.TimeoutError:
+        print(f"⏰ HTTP timeout for {url}")
     except Exception as e:
-        print(f"⚠️ Lightweight check failed for {url}: {str(e)}")
+        print(f"⚠️ HTTP error for {url}: {str(e)}")
     
     return None
 
-def get_content_hash_selenium(url):
-    """Fallback selenium method with optimizations"""
-    driver = None
-    try:
-        print(f"🌐 Using Selenium for URL: {url}")
-        options = get_chrome_options()
-        
+def create_driver_with_retry():
+    """Create Chrome driver with retry mechanism"""
+    global current_driver, driver_usage_count
+    
+    for attempt in range(3):
         try:
+            print(f"🌐 Creating Chrome driver (attempt {attempt + 1}/3)")
+            
+            # Clean up any existing driver
+            if current_driver:
+                try:
+                    current_driver.quit()
+                except:
+                    pass
+                current_driver = None
+            
+            # Clean up Chrome processes if needed
+            if attempt > 0:
+                cleanup_chrome_processes()
+                time.sleep(2)
+            
+            options = get_chrome_options()
+            
             if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
                 driver = webdriver.Chrome(options=options)
             else:
                 service = Service(executable_path=CHROMEDRIVER_PATH)
                 driver = webdriver.Chrome(service=service, options=options)
-                
-            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-            driver.implicitly_wait(3)  # Reduced wait time
             
+            # Test the driver
+            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+            driver.implicitly_wait(3)
+            
+            # Quick test to ensure driver is working
+            driver.get("data:text/html,<html><body>Test</body></html>")
+            if "Test" in driver.page_source:
+                print("✅ Driver test successful")
+                current_driver = driver
+                driver_usage_count = 0
+                return driver
+            else:
+                driver.quit()
+                
+        except (SessionNotCreatedException, WebDriverException) as e:
+            print(f"❌ Driver creation failed (attempt {attempt + 1}): {str(e)}")
+            if attempt == 2:
+                raise
+            time.sleep(3)
+        except Exception as e:
+            print(f"❌ Unexpected driver error (attempt {attempt + 1}): {str(e)}")
+            if attempt == 2:
+                raise
+            time.sleep(3)
+    
+    raise Exception("Failed to create Chrome driver after 3 attempts")
+
+def get_content_hash_selenium(url):
+    """Enhanced Selenium method with better session management"""
+    global current_driver, driver_usage_count
+    
+    for retry in range(MAX_SELENIUM_RETRIES):
+        driver = None
+        try:
+            print(f"🌐 Selenium check for {url} (retry {retry + 1}/{MAX_SELENIUM_RETRIES})")
+            
+            # Check if we need a new driver
+            need_new_driver = (
+                current_driver is None or 
+                driver_usage_count >= DRIVER_REUSE_LIMIT
+            )
+            
+            if need_new_driver:
+                driver = create_driver_with_retry()
+            else:
+                driver = current_driver
+                
+                # Test if current driver is still alive
+                try:
+                    driver.current_url  # This will throw if session is dead
+                except (InvalidSessionIdException, WebDriverException):
+                    print("🔄 Current driver session dead, creating new one")
+                    driver = create_driver_with_retry()
+            
+            # Navigate to URL
+            start_time = time.time()
             driver.get(url)
             
-            # Try multiple selectors quickly
+            # Wait for content with multiple selectors
             selectors_to_try = [
                 ZEALY_CONTAINER_SELECTOR,
                 "div[class*='flex'][class*='flex-col']",
+                "div[class*='questboard']",
                 "main",
+                "div[id*='content']",
                 "body"
             ]
             
             container = None
             for selector in selectors_to_try:
                 try:
-                    container = WebDriverWait(driver, 5).until(  # Reduced wait time
+                    container = WebDriverWait(driver, 8).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                     )
+                    print(f"✅ Found content with selector: {selector}")
                     break
                 except TimeoutException:
                     continue
             
             if not container:
-                return None
+                # Fallback to body content
+                try:
+                    container = driver.find_element(By.TAG_NAME, "body")
+                except NoSuchElementException:
+                    print(f"❌ No content found for {url}")
+                    continue
             
             content = container.text
-            if not content or len(content.strip()) < 10:
-                return None
+            if not content or len(content.strip()) < 20:
+                print(f"⚠️ Content too short for {url}: {len(content)} chars")
+                continue
+            
+            elapsed = time.time() - start_time
+            print(f"✅ Selenium success for {url} in {elapsed:.2f}s ({len(content)} chars)")
+            
+            # Update usage counter
+            driver_usage_count += 1
+            bot_stats['selenium_success'] += 1
             
             return content
             
-        except Exception as e:
-            print(f"⚠️ Selenium error for {url}: {str(e)}")
-            return None
+        except InvalidSessionIdException as e:
+            print(f"🔄 Invalid session for {url}: {str(e)}")
+            bot_stats['selenium_errors'] += 1
+            current_driver = None  # Force new driver creation
+            if retry == MAX_SELENIUM_RETRIES - 1:
+                return None
+            time.sleep(2)
             
-    finally:
-        try:
-            if driver:
-                driver.quit()
-        except:
-            pass
+        except (TimeoutException, WebDriverException) as e:
+            print(f"⚠️ Selenium error for {url} (retry {retry + 1}): {str(e)}")
+            bot_stats['selenium_errors'] += 1
+            if retry == MAX_SELENIUM_RETRIES - 1:
+                return None
+            time.sleep(3)
+            
+        except Exception as e:
+            print(f"❌ Unexpected Selenium error for {url}: {str(e)}")
+            bot_stats['selenium_errors'] += 1
+            if retry == MAX_SELENIUM_RETRIES - 1:
+                return None
+            time.sleep(2)
+    
+    return None
 
 async def get_content_hash(url):
-    """Optimized content hash generation with fallback strategy"""
+    """Enhanced content hash generation with better fallback strategy"""
     try:
+        bot_stats['total_checks'] += 1
+        
         # First try lightweight HTTP request
         content = await try_lightweight_check(url)
         
         # If lightweight fails, use Selenium in thread pool
         if not content:
+            print(f"🔄 Falling back to Selenium for {url}")
             loop = asyncio.get_event_loop()
             content = await loop.run_in_executor(executor, get_content_hash_selenium, url)
         
         if not content:
+            print(f"❌ Failed to get any content for {url}")
             return None
         
         # Clean and hash content
         clean_content = re.sub(
-            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', 
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b|Updated \d+ \w+ ago', 
             '', 
             content
         )
@@ -311,10 +497,11 @@ async def get_content_hash(url):
         
     except Exception as e:
         print(f"❌ Content hash error for {url}: {str(e)}")
+        print(traceback.format_exc())
         return None
 
 async def check_single_url(url, url_data, bot):
-    """Check a single URL and return result"""
+    """Enhanced single URL checking with better error handling"""
     print(f"🔍 Checking URL: {url}")
     start_time = time.time()
     
@@ -334,9 +521,11 @@ async def check_single_url(url, url_data, bot):
         if url_data['hash'] != current_hash:
             print(f"🔔 Change detected for {url} in {elapsed:.2f}s")
             current_time = time.time()
+            bot_stats['total_changes'] += 1
             
-            if current_time - url_data.get('last_notified', 0) > 60:  # Reduced cooldown
-                # Send notification immediately without waiting
+            # Cooldown check
+            if current_time - url_data.get('last_notified', 0) > 90:  # 90 second cooldown
+                # Send notification
                 asyncio.create_task(send_notification_fast(bot, url, elapsed))
                 
                 return {
@@ -368,35 +557,36 @@ async def check_single_url(url, url_data, bot):
         }
 
 async def send_notification_fast(bot, url, response_time):
-    """Fast notification sending without blocking"""
+    """Fast notification sending"""
     try:
-        message = f"🚨 CHANGE DETECTED!\n{url}\n⚡ Response: {response_time:.2f}s"
-        await bot.send_message(chat_id=CHAT_ID, text=message)
-        print(f"✅ Fast notification sent for {url}")
+        message = f"🚨 **CHANGE DETECTED!**\n{url}\n⚡ Response: {response_time:.2f}s"
+        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+        print(f"✅ Notification sent for {url}")
     except Exception as e:
-        print(f"❌ Failed to send fast notification: {str(e)}")
-
-async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != CHAT_ID:
-        await update.message.reply_text("🚫 Unauthorized access!")
-        raise ApplicationHandlerStop
+        print(f"❌ Failed to send notification: {str(e)}")
 
 async def send_notification(bot, message):
     """Standard notification with retries"""
     retries = 0
-    while retries < 2:  # Reduced retries for speed
+    while retries < 3:
         try:
-            await bot.send_message(chat_id=CHAT_ID, text=message)
-            print(f"✅ Sent notification: {message[:50]}...")
+            await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+            print(f"✅ Sent notification")
             return True
         except (TelegramError, NetworkError, TimedOut) as e:
-            print(f"📡 Network error: {str(e)} - Retry {retries+1}/2")
+            print(f"📡 Network error: {str(e)} - Retry {retries+1}/3")
             retries += 1
-            await asyncio.sleep(2)  # Reduced retry delay
+            await asyncio.sleep(3)
     return False
 
+def format_duration(seconds):
+    """Format duration in human readable format"""
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {seconds}s"
+
 async def check_urls_concurrent(bot):
-    """Concurrent URL checking for maximum speed"""
+    """Enhanced concurrent URL checking with better error recovery"""
     global monitored_urls
     current_time = time.time()
     
@@ -451,20 +641,31 @@ async def check_urls_concurrent(bot):
             monitored_urls[url]['failures'] += 1
             
             # Remove URLs with too many failures
-            if monitored_urls[url]['failures'] > 3:  # Reduced threshold
-                asyncio.create_task(send_notification(bot, f"🔴 Removed due to failures: {url}"))
+            if monitored_urls[url]['failures'] > 5:
+                asyncio.create_task(send_notification(bot, f"🔴 **Removed due to failures:** {url}"))
                 del monitored_urls[url]
-                print(f"🗑️ Removed {url} after 3 failures")
+                print(f"🗑️ Removed {url} after 5 failures")
     
-    print(f"✅ Concurrent check complete in {total_elapsed:.2f}s")
+    print(f"✅ Check complete in {total_elapsed:.2f}s")
     print(f"📊 Success: {successful_checks}, Failed: {failed_checks}, Changes: {changes_detected}")
+    
+    # Log statistics
+    error_rate = (bot_stats['selenium_errors'] / max(bot_stats['total_checks'], 1)) * 100
+    if error_rate > 30:
+        print(f"⚠️ High error rate: {error_rate:.1f}% - consider reducing check frequency")
 
-# Command handlers (optimized for faster responses)
+async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != CHAT_ID:
+        await update.message.reply_text("🚫 Unauthorized access!")
+        raise ApplicationHandlerStop
+
+# Command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = format_duration(time.time() - bot_stats['start_time']) if bot_stats['start_time'] else "Not started"
+    error_rate = (bot_stats['selenium_errors'] / max(bot_stats['total_checks'], 1)) * 100
     
     message = (
-        "🚀 **ENHANCED ZEALY MONITOR** ⚡\n\n"
+        "🚀 **ENHANCED ZEALY MONITOR v2.0** ⚡\n\n"
         "**🎯 Commands:**\n"
         "`/add <url>` - Add Zealy URL to monitor\n"
         "`/remove <num>` - Remove URL by number\n"
@@ -482,7 +683,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"└ **URLs Monitored:** {len(monitored_urls)}\n"
         f"└ **Monitoring Active:** {'✅ Yes' if is_monitoring else '❌ No'}\n"
         f"└ **Total Checks:** {bot_stats['total_checks']}\n"
-        f"└ **Changes Found:** {bot_stats['total_changes']}"
+        f"└ **Changes Found:** {bot_stats['total_changes']}\n"
+        f"└ **HTTP Success:** {bot_stats['http_success']}\n"
+        f"└ **Selenium Success:** {bot_stats['selenium_success']}\n"
+        f"└ **Error Rate:** {error_rate:.1f}%"
     )
     await update.message.reply_text(message, parse_mode='Markdown')
 
