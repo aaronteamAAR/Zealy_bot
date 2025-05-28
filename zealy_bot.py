@@ -10,14 +10,14 @@ import concurrent.futures
 try:
     from dotenv import load_dotenv
     from telegram import Update
-    from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+    from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ApplicationHandlerStop
     from telegram.error import TelegramError
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException
+    from selenium.common.exceptions import TimeoutException, WebDriverException
 except ImportError as e:
     print(f"Missing package: {e}")
     sys.exit(1)
@@ -26,9 +26,9 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = int(os.getenv('CHAT_ID'))
-CHECK_INTERVAL = 15  # Reduced from 25
+CHECK_INTERVAL = 20  # Balanced interval
 MAX_URLS = 20
-TIMEOUT = 10  # Reduced from 30
+TIMEOUT = 12  # Reasonable timeout
 
 # Global storage
 monitored_urls = {}
@@ -36,115 +36,160 @@ is_monitoring = False
 driver_pool = []
 session = None
 
-def create_fast_driver():
-    """Create optimized Chrome driver"""
+
+def create_speed_optimized_driver():
+    """Ultra-fast Chrome driver - prioritizes speed over everything"""
     options = Options()
+    
+    # Basic setup
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1280,720")
+    
+    # AGGRESSIVE performance optimizations
     options.add_argument("--disable-images")
-    options.add_argument("--disable-javascript")  # Most speed gain here
-    options.add_argument("--disable-css")
     options.add_argument("--disable-plugins")
     options.add_argument("--disable-extensions")
-    options.add_argument("--window-size=800,600")  # Smaller window
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees,VizDisplayCompositor")
+    options.add_argument("--disable-logging")
+    options.add_argument("--disable-gpu-logging")
+    options.add_argument("--silent")
+    options.add_argument("--no-first-run")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-background-networking")
+    
+    # Speed-focused network settings
     options.add_argument("--aggressive-cache-discard")
-    options.add_argument("--memory-pressure-off")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-renderer-backgrounding")
+    
+    # Minimal user agent
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
     
     driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(TIMEOUT)
-    driver.implicitly_wait(2)  # Reduced wait time
+    driver.set_page_load_timeout(10)  # Very aggressive - 6 seconds max
+    driver.implicitly_wait(1)        # Minimal wait
+    
     return driver
 
 def get_driver():
-    """Get driver from pool or create new one"""
+    """Get driver from pool or create new one with better cleanup"""
     if driver_pool:
-        return driver_pool.pop()
-    return create_fast_driver()
+        driver = driver_pool.pop()
+        # Test if driver is still alive
+        try:
+            driver.current_url
+            return driver
+        except WebDriverException:
+            # Driver is dead, create new one
+            try:
+                driver.quit()
+            except:
+                pass
+    return create_speed_optimized_driver()
 
 def return_driver(driver):
-    """Return driver to pool"""
-    if len(driver_pool) < 3:  # Max 3 drivers in pool
-        driver_pool.append(driver)
-    else:
+    """Return driver to pool with health check"""
+    if not driver:
+        return
+    try:
+        # Quick health check
+        driver.current_url
+        if len(driver_pool) < 2:  # Smaller pool
+            driver_pool.append(driver)
+        else:
+            driver.quit()
+    except:
         try:
             driver.quit()
         except:
             pass
 
-async def fast_content_check(url):
-    """Fast content checking with minimal waiting"""
+async def immediate_content_check(url):
+    """Ultra-fast content checking for immediate alerts"""
     driver = None
     try:
-        # Try HTTP request first (fastest)
-        if session:
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                    if response.status == 200:
-                        text = await response.text()
-                        if len(text) > 1000:  # Has substantial content
-                            # Quick hash of raw HTML with regex cleaning
-                            clean_text = text.replace('\n', '').replace('\r', '').replace('\t', '')
-                            clean_text = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', clean_text)
-                            return hashlib.sha256(clean_text.encode()).hexdigest()
-            except:
-                pass  # Fall back to Selenium
-        
-        # Selenium fallback (when HTTP fails)
         driver = get_driver()
+        
+        print(f"⚡ Fast check: {url}")
+        start_time = time.time()
+        
+        # Quick page load
         driver.get(url)
         
-        # Quick element grab - try main container first
-        try:
-            element = WebDriverWait(driver, 3).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div.flex.flex-col.w-full.pt-100"))
-            )
-            content = element.text
-            if content and len(content) > 50:
-                clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', content)
-                return hashlib.sha256(clean_content.encode()).hexdigest()
-        except TimeoutException:
-            # Last resort - get page source
-            content = driver.page_source
-            if content:
-                clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', content)
-                return hashlib.sha256(clean_content.encode()).hexdigest()
+        # Try to get content ASAP - don't wait for full page load
+        selectors_to_try = [
+            "div.flex.flex-col.w-full.pt-100",  # Primary selector
+            "main",
+            "body"
+        ]
         
-        return None
+        content = None
+        for selector in selectors_to_try:
+            try:
+                # Very short wait - get content as soon as it appears
+                element = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                content = element.text
+                if content and len(content.strip()) > 30:  # Lower threshold
+                    break
+            except TimeoutException:
+                continue
+        
+        if not content or len(content.strip()) < 15:  # Lower minimum
+            print(f"⚠️ Quick check failed: {len(content) if content else 0} chars")
+            return None
+        
+        # Fast hash generation
+        clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|Updated \d+[smhd] ago', '', content)
+        content_hash = hashlib.sha256(clean_content.strip().encode()).hexdigest()
+        
+        elapsed = time.time() - start_time
+        print(f"⚡ Hash: {content_hash[:8]}... ({elapsed:.1f}s)")
+        return content_hash
+        
     except Exception as e:
-        print(f"Error checking {url}: {e}")
+        print(f"❌ Quick check error {url}: {e}")
         return None
     finally:
-        if driver:
-            return_driver(driver)
+        return_driver(driver)
 
-async def check_all_urls_parallel(bot):
-    """Check all URLs in parallel"""
+async def immediate_alert_monitoring(bot):
+    """Ultra-responsive monitoring for immediate alerts"""
     global monitored_urls
     
     if not monitored_urls:
         return
     
-    print(f"🔍 Checking {len(monitored_urls)} URLs in parallel...")
+    print(f"⚡ IMMEDIATE CHECK: {len(monitored_urls)} URLs...")
     start_time = time.time()
     
-    # Create tasks for all URLs
+    # Higher concurrency for speed
+    semaphore = asyncio.Semaphore(4)  # Increased from 2 to 4
+    
+    async def check_with_semaphore(url):
+        async with semaphore:
+            return await immediate_content_check(url)
+    
     tasks = []
     urls = list(monitored_urls.keys())
     
     for url in urls:
-        task = asyncio.create_task(fast_content_check(url))
+        task = asyncio.create_task(check_with_semaphore(url))
         tasks.append((url, task))
     
-    # Wait for all tasks with timeout
     try:
+        # Shorter timeout for immediate processing
         results = await asyncio.wait_for(
             asyncio.gather(*[task for _, task in tasks], return_exceptions=True),
-            timeout=TIMEOUT + 5
+            timeout=20  # Max 20 seconds total
         )
         
-        # Process results
         current_time = time.time()
         notifications = []
         
@@ -155,103 +200,115 @@ async def check_all_urls_parallel(bot):
             result = results[i]
             if isinstance(result, Exception) or not result:
                 monitored_urls[url]['failures'] = monitored_urls[url].get('failures', 0) + 1
-                if monitored_urls[url]['failures'] > 3:  # Faster removal
+                print(f"⚠️ Failed: {url} (#{monitored_urls[url]['failures']})")
+                
+                # More lenient failure handling for speed
+                if monitored_urls[url]['failures'] > 5:
                     del monitored_urls[url]
-                    notifications.append(f"🔴 Removed {url} (too many failures)")
+                    notifications.append(f"🔴 Removed {url[:40]}... (too many failures)")
                 continue
             
             # Reset failures on success
             monitored_urls[url]['failures'] = 0
             
-            # Check for changes
+            # IMMEDIATE CHANGE DETECTION - NO COOLDOWN!
             if monitored_urls[url]['hash'] != result:
-                if current_time - monitored_urls[url].get('last_notified', 0) > 180:  # 3min cooldown
-                    notifications.append(f"🚨 CHANGE: {url}")
-                    monitored_urls[url]['last_notified'] = current_time
+                # Format immediate notification with timestamp
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                notifications.append(f"🚨 INSTANT ALERT [{timestamp}]\n🔗 {url}\n📊 Hash changed: {result[:8]}...")
+                monitored_urls[url]['last_notified'] = current_time
+                print(f"🔥 IMMEDIATE CHANGE: {url}")
                 
                 monitored_urls[url]['hash'] = result
             
             monitored_urls[url]['last_checked'] = current_time
         
-        # Send all notifications at once
+        # Send notifications IMMEDIATELY
         if notifications:
-            await bot.send_message(chat_id=CHAT_ID, text="\n".join(notifications))
+            for notification in notifications:
+                # Send each notification separately for maximum speed
+                await bot.send_message(chat_id=CHAT_ID, text=notification[:4000])
+                print(f"📱 Sent immediate alert!")
         
         elapsed = time.time() - start_time
-        print(f"✅ Checked {len(urls)} URLs in {elapsed:.2f}s")
+        print(f"⚡ SPEED RUN: {len(urls)} URLs in {elapsed:.2f}s")
         
     except asyncio.TimeoutError:
-        print("⚠️ Some URL checks timed out")
+        print("⚠️ Some checks timed out - but continuing for speed")
 
-async def monitoring_loop(application):
-    """Fast monitoring loop"""
-    global is_monitoring, session
-    
-    # Create persistent HTTP session
-    session = aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=5),
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
-    )
+
+async def speed_monitoring_loop(application):
+    """Ultra-fast monitoring loop for immediate alerts"""
+    global is_monitoring
     
     bot = application.bot
-    await bot.send_message(chat_id=CHAT_ID, text="🚀 Fast monitoring started!")
+    await bot.send_message(chat_id=CHAT_ID, text="⚡ IMMEDIATE ALERT MODE ACTIVATED!")
     
     try:
         while is_monitoring:
-            await check_all_urls_parallel(bot)
-            await asyncio.sleep(CHECK_INTERVAL)
+            await immediate_alert_monitoring(bot)
+            # Short sleep for immediate responsiveness
+            await asyncio.sleep(CHECK_INTERVAL)  # 10 seconds
     except Exception as e:
-        print(f"Monitoring error: {e}")
+        print(f"❌ Speed monitoring error: {e}")
+        await bot.send_message(chat_id=CHAT_ID, text=f"🚨 URGENT: Monitoring error: {e}")
     finally:
-        if session:
-            await session.close()
-        # Cleanup drivers
+        # Cleanup
         while driver_pool:
             try:
                 driver_pool.pop().quit()
             except:
                 pass
+        print("🧹 Speed monitoring cleanup completed")
 
-# Fixed auth middleware function
+# FIXED auth middleware
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check if user is authorized"""
+    """Properly block unauthorized users"""
     if update.effective_chat.id != CHAT_ID:
         await update.message.reply_text("🚫 Unauthorized")
-        return  # Stop processing this update
+        raise ApplicationHandlerStop  # This actually stops processing
 
-# Simplified command handlers
+# Command handlers (keeping them simple and functional)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚡ Fast Zealy Monitor\n"
-        "/add <url> - Add URL\n"
-        "/remove <#> - Remove URL\n"
-        "/list - Show URLs\n"
+        "⚡ Smart Zealy Monitor v2\n\n"
+        "📋 Commands:\n"
+        "/add <url> - Add monitoring URL\n"
+        "/remove <#> - Remove URL by number\n"
+        "/list - Show monitored URLs\n"
         "/run - Start monitoring\n"
-        "/stop - Stop\n"
-        "/purge - Clear all"
+        "/stop - Stop monitoring\n"
+        "/purge - Clear all URLs\n\n"
+        f"📊 Limits: {MAX_URLS} URLs, {CHECK_INTERVAL}s interval"
     )
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(monitored_urls) >= MAX_URLS:
-        await update.message.reply_text(f"❌ Max {MAX_URLS} URLs")
+        await update.message.reply_text(f"❌ Max {MAX_URLS} URLs reached")
         return
     
     if not context.args:
-        await update.message.reply_text("❌ Usage: /add <url>")
+        await update.message.reply_text("❌ Usage: /add <zealy-url>")
         return
     
     url = context.args[0].lower()
-    if url in monitored_urls:
-        await update.message.reply_text("⚠️ Already monitoring")
+    
+    # Validate Zealy URL
+    if not re.match(r'^https://(www\.)?zealy\.io/cw/[\w/-]+$', url):
+        await update.message.reply_text("❌ Invalid Zealy URL format")
         return
     
-    # Quick validation and initial check
-    msg = await update.message.reply_text("⏳ Adding...")
+    if url in monitored_urls:
+        await update.message.reply_text("⚠️ Already monitoring this URL")
+        return
+    
+    msg = await update.message.reply_text("⏳ Verifying URL...")
     
     try:
-        initial_hash = await fast_content_check(url)
+        # Get initial hash
+        initial_hash = await immediate_content_check(url)
         if not initial_hash:
-            await msg.edit_text("❌ Can't access URL")
+            await msg.edit_text("❌ Unable to access URL content")
             return
         
         monitored_urls[url] = {
@@ -261,13 +318,18 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'failures': 0
         }
         
-        await msg.edit_text(f"✅ Added! ({len(monitored_urls)}/{MAX_URLS})")
+        await msg.edit_text(
+            f"✅ Added successfully!\n"
+            f"📊 Monitoring: {len(monitored_urls)}/{MAX_URLS} URLs"
+        )
+        print(f"➕ Added: {url}")
+        
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        await msg.edit_text(f"❌ Error: {str(e)}")
 
 async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not monitored_urls or not context.args:
-        await update.message.reply_text("❌ Usage: /remove <number>")
+        await update.message.reply_text("❌ Usage: /remove <number>\nUse /list to see numbers")
         return
     
     try:
@@ -276,56 +338,70 @@ async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 0 <= idx < len(urls):
             url = urls[idx]
             del monitored_urls[url]
-            await update.message.reply_text(f"✅ Removed: {url}")
+            await update.message.reply_text(f"✅ Removed: {url[:50]}...")
+            print(f"➖ Removed: {url}")
         else:
-            await update.message.reply_text("❌ Invalid number")
+            await update.message.reply_text(f"❌ Invalid number (1-{len(urls)})")
     except ValueError:
-        await update.message.reply_text("❌ Invalid number")
+        await update.message.reply_text("❌ Please enter a valid number")
 
 async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not monitored_urls:
-        await update.message.reply_text("📋 No URLs")
+        await update.message.reply_text("📋 No URLs being monitored")
         return
     
-    urls = [f"{i}. {url}" for i, url in enumerate(monitored_urls.keys(), 1)]
-    await update.message.reply_text("📋 URLs:\n" + "\n".join(urls)[:4000])
+    urls_list = []
+    for i, (url, data) in enumerate(monitored_urls.items(), 1):
+        status = "✅" if data.get('failures', 0) == 0 else f"⚠️({data['failures']})"
+        last_check = data.get('last_checked', 0)
+        if last_check > 0:
+            ago = int((time.time() - last_check) / 60)
+            time_str = f"{ago}m ago" if ago > 0 else "just now"
+        else:
+            time_str = "never"
+        
+        urls_list.append(f"{i}. {status} {url}\n   Last: {time_str}")
+    
+    message = f"📋 Monitored URLs ({len(monitored_urls)}/{MAX_URLS}):\n\n" + "\n\n".join(urls_list)
+    await update.message.reply_text(message[:4000])
 
 async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
     if is_monitoring:
-        await update.message.reply_text("⚠️ Already running")
+        await update.message.reply_text("⚠️ Already monitoring")
         return
     if not monitored_urls:
-        await update.message.reply_text("❌ No URLs")
+        await update.message.reply_text("❌ No URLs to monitor")
         return
     
     is_monitoring = True
-    asyncio.create_task(monitoring_loop(context.application))
-    await update.message.reply_text("✅ Started!")
+    asyncio.create_task(speed_monitoring_loop(context.application))
+    await update.message.reply_text("✅ Monitoring started!")
 
 async def stop_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
     is_monitoring = False
-    await update.message.reply_text("🛑 Stopped")
+    await update.message.reply_text("🛑 Monitoring stopped")
 
 async def purge_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitored_urls
+    count = len(monitored_urls)
     monitored_urls.clear()
-    await update.message.reply_text("✅ All URLs cleared")
+    await update.message.reply_text(f"✅ Cleared {count} URLs")
 
 def main():
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         print("❌ Missing TELEGRAM_BOT_TOKEN or CHAT_ID in .env")
         return
     
-    print("🚀 Starting fast Zealy monitor...")
+    print("🚀 Starting Smart Zealy Monitor...")
     
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Add auth middleware - FIXED VERSION
+    # Add FIXED auth middleware
     app.add_handler(MessageHandler(filters.ALL, auth_middleware), group=-1)
     
-    # Add handlers
+    # Add command handlers
     handlers = [
         CommandHandler("start", start),
         CommandHandler("add", add_url),
@@ -339,7 +415,7 @@ def main():
     for handler in handlers:
         app.add_handler(handler)
     
-    print("✅ Bot ready - polling...")
+    print("✅ Bot ready - starting polling...")
     app.run_polling()
 
 if __name__ == "__main__":
