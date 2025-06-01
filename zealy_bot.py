@@ -150,7 +150,6 @@ def get_chrome_options():
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-plugins")
     options.add_argument("--disable-images")  # Keep disabled for speed
-    options.add_argument("--disable-javascript")  # Keep disabled for speed
     options.add_argument("--disable-web-security")
     options.add_argument("--disable-features=TranslateUI")
     options.add_argument("--disable-iframes")
