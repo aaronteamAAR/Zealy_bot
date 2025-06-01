@@ -226,10 +226,7 @@ def get_content_hash(url):
                 
                 # Try multiple selectors with reduced timeout
                 selectors_to_try = [
-                    ZEALY_CONTAINER_SELECTOR,
-                    "div[class*='flex'][class*='flex-col']",
-                    "main",
-                    "body"
+                    ZEALY_CONTAINER_SELECTOR
                 ]
                 
                 container = None
