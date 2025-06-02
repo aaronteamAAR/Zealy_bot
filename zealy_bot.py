@@ -8,8 +8,6 @@ import traceback
 import sys
 from datetime import datetime
 import platform
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # First check if required packages are installed
 try:
@@ -86,15 +84,11 @@ except Exception as e:
     print(f"Warning: ChromeDriver auto-installation failed: {e}")
     print("We'll try to use existing Chrome/ChromeDriver")
 
-# OPTIMIZED Configuration for faster real-time monitoring
-CHECK_INTERVAL = 10  # Reduced from 25 to 8 seconds for faster detection
+# Configuration
+CHECK_INTERVAL = 25
 MAX_URLS = 20 
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
-REQUEST_TIMEOUT = 20  # Reduced from 30 to 12 seconds
-PAGE_LOAD_TIMEOUT = 20  # Reduced page load timeout
-ELEMENT_WAIT_TIMEOUT = 15  # Reduced element wait timeout
-MAX_FAILURES_THRESHOLD = 8  # Increased from 5 to 15 to prevent premature removal
-MAX_CONCURRENT_CHECKS = 2  # Number of URLs to check simultaneously
+REQUEST_TIMEOUT = 30
 
 # Set appropriate paths based on environment
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
@@ -120,9 +114,6 @@ monitored_urls = {}
 is_monitoring = False
 SECURITY_LOG = "activity.log"
 
-# Thread pool for concurrent URL checking
-url_check_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHECKS)
-
 def kill_previous_instances():
     current_pid = os.getpid()
     try:
@@ -144,21 +135,13 @@ def get_chrome_options():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,720")  # Smaller window for faster rendering
+    options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-features=VizDisplayCompositor")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")  # Keep disabled for speed
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-iframes")
-    options.add_argument("--disable-background-timer-throttling")
-    options.add_argument("--disable-backgrounding-occluded-windows")
-    options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--disable-component-update")
-    options.add_argument("--aggressive-cache-discard")
-    options.add_argument("--memory-pressure-off")
+    # options.add_argument("--disable-images")
+    # options.add_argument("--disable-javascript")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     # Add special options for Render.com
@@ -167,7 +150,8 @@ def get_chrome_options():
         options.add_argument("--disable-dev-tools")
         options.add_argument("--no-zygote")
         options.add_argument("--single-process")
-        options.add_argument("--max_old_space_size=2048")  # Reduced memory allocation
+        options.add_argument("--memory-pressure-off")
+        options.add_argument("--max_old_space_size=4096")
     
     # Use environment variables for paths
     print(f"🕵️ Using Chrome binary path: {CHROME_PATH}")
@@ -197,136 +181,108 @@ def get_chrome_options():
     return options
 
 def get_content_hash(url):
-    """Optimized content hash function with faster timeouts and fewer retries"""
     driver = None
-    max_retries = 2  # Reduced from 3 to 2 retries
+    max_retries = 3
     retry_count = 0
     
     while retry_count < max_retries:
         try:
-            print(f"🌐 Checking URL: {url} (Attempt {retry_count + 1}/{max_retries})")
+            print(f"🌐 Initializing driver for URL: {url} (Attempt {retry_count + 1}/{max_retries})")
             options = get_chrome_options()
             
             try:
                 if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
                     # On Render or if we can't find chromedriver, let Selenium find it automatically
+                    print("Using default ChromeDriver (auto-detection)")
                     driver = webdriver.Chrome(options=options)
                 else:
                     # Use specified path when available
+                    print(f"Using specified ChromeDriver path: {CHROMEDRIVER_PATH}")
                     service = Service(executable_path=CHROMEDRIVER_PATH)
                     driver = webdriver.Chrome(service=service, options=options)
                     
-                # Set faster timeouts
-                driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-                driver.implicitly_wait(2)  # Reduced implicit wait
-                
-                start_time = time.time()
+                print(f"🌐 Loading URL: {url}")
+                driver.set_page_load_timeout(REQUEST_TIMEOUT)
                 driver.get(url)
                 
-                # Try multiple selectors with reduced timeout
+                print("⏳ Waiting for page elements...")
+                # Try multiple selectors in case the page structure changes
                 selectors_to_try = [
-                    ZEALY_CONTAINER_SELECTOR
+                    ZEALY_CONTAINER_SELECTOR,
+                    "div[class*='flex'][class*='flex-col']",
+                    "main",
+                    "body"
                 ]
                 
                 container = None
                 for selector in selectors_to_try:
                     try:
-                        container = WebDriverWait(driver, ELEMENT_WAIT_TIMEOUT).until(
+                        container = WebDriverWait(driver, 8).until(
                             EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                         )
                         print(f"✅ Found element with selector: {selector}")
                         break
                     except TimeoutException:
+                        print(f"⚠️ Selector {selector} not found, trying next...")
                         continue
                 
                 if not container:
                     print("❌ No suitable container found")
-                    if retry_count < max_retries - 1:
-                        retry_count += 1
-                        time.sleep(2)  # Reduced retry wait
-                        continue
                     return None
                 
-                # Minimal wait for content - reduced from 2 to 0.5 seconds
-                time.sleep(0.5)
+                # Wait a bit more for content to load
+                time.sleep(2)
                 content = container.text
                 
                 if not content or len(content.strip()) < 10:
-                    print(f"⚠️ Content too short: {len(content)} chars")
+                    print(f"⚠️ Content too short or empty: {len(content)} chars")
                     if retry_count < max_retries - 1:
                         retry_count += 1
-                        time.sleep(2)
+                        time.sleep(5)  # Wait before retry
                         continue
                     return None
                 
-                # Clean content and generate hash
+                print(f"📄 Content retrieved, length: {len(content)} chars")
                 clean_content = re.sub(
                     r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', 
                     '', 
                     content
                 )
                 content_hash = hashlib.sha256(clean_content.strip().encode()).hexdigest()
-                
-                elapsed = time.time() - start_time
-                print(f"🔢 Hash generated in {elapsed:.2f}s: {content_hash[:8]}...")
+                print(f"🔢 Hash generated: {content_hash[:8]}...")
                 return content_hash
                 
             except TimeoutException:
-                print(f"⚠️ Timeout on {url}")
+                print(f"⚠️ Timeout waiting for page elements on {url}")
                 if retry_count < max_retries - 1:
                     retry_count += 1
-                    time.sleep(2)
+                    time.sleep(5)
                     continue
                 return None
             except WebDriverException as e:
                 print(f"⚠️ WebDriver error: {str(e)}")
                 if retry_count < max_retries - 1:
                     retry_count += 1
-                    time.sleep(2)
+                    time.sleep(5)
                     continue
                 return None
         except Exception as e:
             print(f"❌ Content check error: {str(e)}")
             if retry_count < max_retries - 1:
                 retry_count += 1
-                time.sleep(2)
+                time.sleep(5)
                 continue
             return None
         finally:
             try:
                 if driver:
+                    print("🧹 Closing WebDriver")
                     driver.quit()
                     driver = None
             except Exception as e:
                 print(f"⚠️ Error closing WebDriver: {str(e)}")
     
     return None
-
-def check_single_url(url_data):
-    """Check a single URL and return results"""
-    url, data = url_data
-    try:
-        start_time = time.time()
-        current_hash = get_content_hash(url)
-        elapsed = time.time() - start_time
-        
-        return {
-            'url': url,
-            'hash': current_hash,
-            'elapsed': elapsed,
-            'success': current_hash is not None,
-            'previous_hash': data['hash']
-        }
-    except Exception as e:
-        print(f"❌ Error checking {url}: {str(e)}")
-        return {
-            'url': url,
-            'hash': None,
-            'elapsed': 0,
-            'success': False,
-            'error': str(e),
-            'previous_hash': data['hash']
-        }
 
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
@@ -343,11 +299,10 @@ async def send_notification(bot, message):
         except (TelegramError, NetworkError) as e:
             print(f"📡 Network error: {str(e)} - Retry {retries+1}/3")
             retries += 1
-            await asyncio.sleep(2)  # Reduced retry delay
+            await asyncio.sleep(5)
     return False
 
 async def check_urls(bot):
-    """Optimized concurrent URL checking"""
     global monitored_urls
     current_time = time.time()
     
@@ -355,76 +310,78 @@ async def check_urls(bot):
         print("⚠️ No URLs to check")
         return
     
-    print(f"🔍 Starting concurrent check of {len(monitored_urls)} URLs")
+    # Create tasks for parallel execution
+    tasks = []
+    for url in list(monitored_urls.keys()):
+        task = asyncio.create_task(check_single_url(bot, url, current_time))
+        tasks.append(task)
     
-    # Prepare URL data for concurrent checking
-    url_items = list(monitored_urls.items())
+    # Wait for all tasks to complete
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Submit all URL checks concurrently
-    futures = []
-    with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_CHECKS, len(url_items))) as executor:
-        for url_data in url_items:
-            future = executor.submit(check_single_url, url_data)
-            futures.append(future)
+    # Count successful checks
+    successful_checks = sum(1 for result in results if result is not False and not isinstance(result, Exception))
+    print(f"✅ Checked {len(monitored_urls)} URLs ({successful_checks} successful)")
+
+async def check_single_url(bot, url, current_time):
+    """Check a single URL - runs in parallel with other URLs"""
+    global monitored_urls
+    
+    # Check if URL still exists (might have been removed by another task)
+    if url not in monitored_urls:
+        return False
+    
+    print(f"🔍 Checking URL: {url}")
+    try:
+        start_time = time.time()
         
-        # Process results as they complete
-        for future in as_completed(futures):
-            try:
-                result = future.result(timeout=REQUEST_TIMEOUT + 5)  # Add buffer to timeout
-                url = result['url']
-                
-                # Skip if URL was removed during checking
-                if url not in monitored_urls:
-                    continue
-                
-                if result['success']:
-                    # Reset failure count on successful check
-                    monitored_urls[url]['failures'] = 0
-                    monitored_urls[url]['last_checked'] = current_time
-                    
-                    # Check for changes
-                    if monitored_urls[url]['hash'] != result['hash']:
-                        print(f"🔔 CHANGE DETECTED: {url} (Response: {result['elapsed']:.2f}s)")
-                        
-                        # Send immediate notification (removed 300s cooldown for real-time updates)
-                        success = await send_notification(
-                            bot, 
-                            f"🚨 CHANGE DETECTED!\n{url}\n⚡ Response time: {result['elapsed']:.2f}s\n🕐 Detected at: {datetime.now().strftime('%H:%M:%S')}"
-                        )
-                        
-                        if success:
-                            monitored_urls[url].update({
-                                'last_notified': current_time,
-                                'hash': result['hash']
-                            })
-                            print(f"✅ Notification sent for {url}")
-                        else:
-                            print(f"❌ Failed to send notification for {url}")
-                    else:
-                        print(f"✓ No changes: {url} ({result['elapsed']:.2f}s)")
+        # Run the blocking get_content_hash in a thread pool
+        loop = asyncio.get_event_loop()
+        current_hash = await loop.run_in_executor(None, get_content_hash, url)
+        
+        # Check again if URL still exists after async operation
+        if url not in monitored_urls:
+            return False
+        
+        if not current_hash:
+            monitored_urls[url]['failures'] += 1
+            print(f"⚠️ Failed to get hash for {url} - Failure #{monitored_urls[url]['failures']}")
+            if monitored_urls[url]['failures'] > 3:  # Reduced from 5 to 3
+                del monitored_urls[url]
+                await send_notification(bot, f"🔴 Removed from monitoring due to repeated failures: {url}")
+                print(f"🗑️ Removed {url} after 3 failures")
+            return False
+        
+        # Reset failure count on successful check
+        monitored_urls[url]['failures'] = 0
+        if monitored_urls[url]['hash'] != current_hash:
+            print(f"🔔 Change detected for {url}")
+            if current_time - monitored_urls[url].get('last_notified', 0) > 300:
+                success = await send_notification(
+                    bot, f"🚨 CHANGE DETECTED!\n{url}\nResponse time: {time.time()-start_time:.2f}s")
+                if success:
+                    monitored_urls[url].update({
+                        'last_notified': current_time,
+                        'hash': current_hash,
+                        'last_checked': current_time
+                    })
+                    print(f"✅ Notification sent for {url}")
                 else:
-                    # Handle failure
-                    monitored_urls[url]['failures'] += 1
-                    failure_count = monitored_urls[url]['failures']
-                    print(f"⚠️ Failed to check {url} - Failure #{failure_count}/{MAX_FAILURES_THRESHOLD}")
-                    
-                    # Only remove after reaching the higher threshold
-                    if failure_count >= MAX_FAILURES_THRESHOLD:
-                        del monitored_urls[url]
-                        await send_notification(bot, f"🔴 Removed from monitoring after {MAX_FAILURES_THRESHOLD} consecutive failures: {url}")
-                        print(f"🗑️ Removed {url} after {MAX_FAILURES_THRESHOLD} failures")
-                        
-            except concurrent.futures.TimeoutError:
-                print(f"⚠️ Timeout processing URL check result")
-            except Exception as e:
-                print(f"⚠️ Error processing result: {str(e)}")
-    
-    print(f"✅ Concurrent check completed for {len(monitored_urls)} URLs")
+                    print(f"❌ Failed to send notification for {url}")
+        else:
+            print(f"✓ No changes for {url}")
+        
+        monitored_urls[url]['last_checked'] = current_time
+        return True
+        
+    except Exception as e:
+        print(f"⚠️ Error processing {url}: {str(e)}")
+        return False
 
 # Command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 Zealy Monitoring Bot (Optimized for Real-time)\n\n"
+        "🚀 Zealy Monitoring Bot\n\n"
         "Commands:\n"
         "/add <url> - Add monitoring URL\n"
         "/remove <number> - Remove URL by number\n"
@@ -432,33 +389,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/run - Start monitoring\n"
         "/stop - Stop monitoring\n"
         "/purge - Remove all URLs\n"
-        f"Max URLs: {MAX_URLS}\n"
-        f"⚡ Check interval: {CHECK_INTERVAL}s\n"
-        f"🛡️ Failure threshold: {MAX_FAILURES_THRESHOLD}"
+        f"Max URLs: {MAX_URLS}"
     )
 
 async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not monitored_urls:
         await update.message.reply_text("No monitored URLs")
         return
-    
-    message_parts = ["📋 Monitored URLs:"]
-    for idx, (url, data) in enumerate(monitored_urls.items(), 1):
-        failures = data.get('failures', 0)
-        last_checked = data.get('last_checked', 0)
-        if last_checked:
-            time_ago = int(time.time() - last_checked)
-            time_str = f"({time_ago}s ago)"
-        else:
-            time_str = "(never)"
-        
-        status = "🔴" if failures > 0 else "🟢"
-        message_parts.append(f"{idx}. {status} {url} {time_str}")
-        if failures > 0:
-            message_parts.append(f"   ⚠️ Failures: {failures}/{MAX_FAILURES_THRESHOLD}")
-    
-    message = "\n".join(message_parts)[:4000]
-    await update.message.reply_text(message)
+    message = ["📋 Monitored URLs:"] + [f"{idx}. {url}" for idx, url in enumerate(monitored_urls.keys(), 1)]
+    await update.message.reply_text("\n".join(message)[:4000])
 
 async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
@@ -525,16 +464,13 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         # Show processing message
-        processing_msg = await update.message.reply_text("⏳ Verifying URL (fast check)...")
+        processing_msg = await update.message.reply_text("⏳ Verifying URL...")
         
-        # Get initial hash in a separate thread
+        # Get initial hash in a separate thread or process
         try:
             loop = asyncio.get_event_loop()
             print(f"🔄 Getting initial hash for {url}")
-            start_time = time.time()
-            
-            initial_hash = await loop.run_in_executor(url_check_executor, get_content_hash, url)
-            elapsed = time.time() - start_time
+            initial_hash = await loop.run_in_executor(None, get_content_hash, url)
             
             if not initial_hash:
                 await processing_msg.edit_text("❌ Failed to verify URL content. Check console for details.")
@@ -550,7 +486,7 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             print(f"✅ URL added successfully: {url}")
             await processing_msg.edit_text(
-                f"✅ Added: {url}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}\n⚡ Initial check: {elapsed:.2f}s"
+                f"✅ Added: {url}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
             )
             
         except Exception as e:
@@ -579,13 +515,8 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         monitor_task = asyncio.create_task(start_monitoring(context.application))
         # Store task in context for reference
         context.chat_data['monitor_task'] = monitor_task
-        await update.message.reply_text(
-            f"✅ Real-time monitoring started!\n"
-            f"⚡ Check interval: {CHECK_INTERVAL}s\n"
-            f"🔗 Monitoring {len(monitored_urls)} URLs\n"
-            f"🚀 Concurrent checks: {MAX_CONCURRENT_CHECKS}"
-        )
-        print("✅ Optimized monitoring task created and started")
+        await update.message.reply_text("✅ Monitoring started!")
+        print("✅ Monitoring task created and started")
     except Exception as e:
         is_monitoring = False
         await update.message.reply_text(f"❌ Failed to start monitoring: {str(e)}")
@@ -614,20 +545,17 @@ async def purge_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_monitoring(application: Application):
     global is_monitoring
     bot = application.bot
-    await send_notification(bot, f"🔔 Real-time monitoring started! (Check every {CHECK_INTERVAL}s)")
-    print("🔍 Entering optimized monitoring loop")
+    await send_notification(bot, "🔔 Monitoring started!")
+    print("🔍 Entering monitoring loop")
     
     while is_monitoring:
         try:
-            print(f"🔄 Running concurrent URL check - {len(monitored_urls)} URLs")
+            print(f"🔄 Running URL check cycle - {len(monitored_urls)} URLs")
             start_time = time.time()
             await check_urls(bot)
             elapsed = time.time() - start_time
-            
-            # Adaptive wait time to maintain consistent interval
-            wait_time = max(CHECK_INTERVAL - elapsed, 1)  # Minimum 1 second wait
-            print(f"✓ Check cycle complete in {elapsed:.2f}s, waiting {wait_time:.2f}s")
-            
+            wait_time = max(CHECK_INTERVAL - elapsed, 3)
+            print(f"✓ Check complete in {elapsed:.2f}s, waiting {wait_time:.2f}s before next check")
             await asyncio.sleep(wait_time)
         except asyncio.CancelledError:
             print("🚫 Monitoring task was cancelled")
@@ -635,8 +563,8 @@ async def start_monitoring(application: Application):
         except Exception as e:
             print(f"🚨 Monitoring error: {str(e)}")
             print(traceback.format_exc())
-            # Shorter sleep on error to maintain responsiveness
-            await asyncio.sleep(10)
+            # Add a shorter sleep on error to prevent rapid failure loops
+            await asyncio.sleep(30)
     
     print("👋 Exiting monitoring loop")
     await send_notification(bot, "🔴 Monitoring stopped!")
@@ -645,11 +573,7 @@ def main():
     try:
         global CHROME_PATH, CHROMEDRIVER_PATH
         
-        print(f"🚀 Starting optimized bot at {datetime.now()}")
-        print(f"⚡ Check interval: {CHECK_INTERVAL}s")
-        print(f"🔗 Max concurrent checks: {MAX_CONCURRENT_CHECKS}")
-        print(f"🛡️ Failure threshold: {MAX_FAILURES_THRESHOLD}")
-        
+        print(f"🚀 Starting bot at {datetime.now()}")
         kill_previous_instances()
 
         # Debug environment info
@@ -692,6 +616,7 @@ def main():
                 print(f"📌 Using Chrome at: {CHROME_PATH}")
                 print(f"📌 Using Chromedriver at: {CHROMEDRIVER_PATH}")
         
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         if sys.platform == "win32":
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -728,7 +653,7 @@ def main():
         input("Press Enter to exit...")
     finally:
         try:
-            url_check_executor.shutdown()
+            executor.shutdown()
         except:
             pass
         print("🧹 Cleaning up...")
