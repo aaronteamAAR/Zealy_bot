@@ -142,7 +142,7 @@ def get_chrome_options():
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-plugins")
     options.add_argument("--disable-images")
-    options.add_argument("--disable-javascript")
+    # KEEP JAVASCRIPT ENABLED - Zealy needs it!
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     # Performance optimizations
@@ -203,17 +203,29 @@ class URLData:
             self.avg_response_time = 0.7 * self.avg_response_time + 0.3 * response_time
 
 class DriverPool:
-    """Connection pool for WebDriver instances"""
+    """Adaptive driver management - switches between pooling and fresh drivers based on environment"""
     
     def __init__(self, pool_size: int = DRIVER_POOL_SIZE):
         self.pool_size = pool_size
         self.available_drivers = Queue()
         self.active_drivers = set()
         self.lock = threading.Lock()
-        self._initialize_pool()
+        
+        # Failure tracking for adaptive behavior
+        self.session_failures_count = 0
+        self.consecutive_failures = 0
+        self.use_fresh_drivers = False  # Start with pooling
+        self.last_failure_time = 0
+        
+        if not self.use_fresh_drivers:
+            self._initialize_pool()
     
     def _initialize_pool(self):
         """Pre-initialize driver pool for faster access"""
+        if self.use_fresh_drivers:
+            print("🔧 Using fresh drivers mode - no pool initialization")
+            return
+            
         for _ in range(self.pool_size):
             try:
                 driver = self._create_driver()
@@ -222,6 +234,7 @@ class DriverPool:
                     print(f"✅ Driver added to pool. Pool size: {self.available_drivers.qsize()}")
             except Exception as e:
                 print(f"⚠️ Failed to initialize driver in pool: {e}")
+                self._handle_session_failure()
     
     def _create_driver(self):
         """Create a new WebDriver instance"""
@@ -241,13 +254,58 @@ class DriverPool:
             print(f"❌ Failed to create driver: {e}")
             return None
     
+    def _handle_session_failure(self):
+        """Track session failures and switch to fresh drivers if needed"""
+        self.session_failures_count += 1
+        self.consecutive_failures += 1
+        self.last_failure_time = time.time()
+        
+        # Switch to fresh drivers if we have too many consecutive failures
+        if self.consecutive_failures >= 3 and not self.use_fresh_drivers:
+            print("🚨 TOO MANY SESSION FAILURES - SWITCHING TO FRESH DRIVERS MODE")
+            self.use_fresh_drivers = True
+            self.cleanup()  # Clear the pool
+        elif self.session_failures_count >= 10:
+            print("🚨 PERSISTENT SESSION ISSUES - ENFORCING FRESH DRIVERS MODE")
+            self.use_fresh_drivers = True
+            self.cleanup()
+
     def get_driver(self, timeout: int = 10):
-        """Get an available driver from the pool"""
+        """Get a driver - adaptive between pooled and fresh"""
+        
+        # FRESH DRIVERS MODE - always create new
+        if self.use_fresh_drivers:
+            print("🆕 Creating fresh driver (pool disabled due to session failures)")
+            driver = self._create_driver()
+            if driver:
+                with self.lock:
+                    self.active_drivers.add(driver)
+            return driver
+        
+        # POOLED MODE - try to reuse
         try:
             driver = self.available_drivers.get(timeout=timeout)
-            with self.lock:
-                self.active_drivers.add(driver)
+            
+            # Check if driver is still functional before using
+            if not self._is_driver_healthy(driver):
+                print("🔄 Driver unhealthy, creating new one...")
+                self._close_driver(driver)
+                self._handle_session_failure()
+                
+                # If we just switched to fresh mode, return fresh driver
+                if self.use_fresh_drivers:
+                    return self.get_driver(timeout)
+                    
+                driver = self._create_driver()
+            else:
+                # Driver is healthy, reset consecutive failures
+                self.consecutive_failures = 0
+            
+            if driver:
+                with self.lock:
+                    self.active_drivers.add(driver)
             return driver
+            
         except Empty:
             # If no drivers available, create a new one
             print("⚠️ No drivers available, creating new one...")
@@ -258,7 +316,7 @@ class DriverPool:
             return driver
     
     def return_driver(self, driver):
-        """Return a driver to the pool"""
+        """Return a driver - adaptive behavior"""
         if not driver:
             return
             
@@ -266,34 +324,70 @@ class DriverPool:
             with self.lock:
                 self.active_drivers.discard(driver)
             
-            # Check if driver is still functional
+            # FRESH DRIVERS MODE - always close immediately
+            if self.use_fresh_drivers:
+                print("🗑️ Closing fresh driver (not returning to pool)")
+                self._close_driver(driver)
+                return
+            
+            # POOLED MODE - enhanced health check before returning to pool
             if self._is_driver_healthy(driver):
-                self.available_drivers.put(driver)
+                # Additional check: try a simple operation
+                try:
+                    _ = driver.current_url
+                    self.available_drivers.put(driver)
+                    print("✅ Healthy driver returned to pool")
+                    # Reset consecutive failures on successful return
+                    self.consecutive_failures = 0
+                except Exception as e:
+                    print(f"🔄 Driver failed health check during return: {e}")
+                    self._close_driver(driver)
+                    self._handle_session_failure()
+                    # Replace with new driver if still in pooled mode
+                    if not self.use_fresh_drivers:
+                        new_driver = self._create_driver()
+                        if new_driver:
+                            self.available_drivers.put(new_driver)
             else:
                 print("🔄 Replacing unhealthy driver")
                 self._close_driver(driver)
-                # Replace with new driver
-                new_driver = self._create_driver()
-                if new_driver:
-                    self.available_drivers.put(new_driver)
+                self._handle_session_failure()
+                # Replace with new driver if still in pooled mode
+                if not self.use_fresh_drivers:
+                    new_driver = self._create_driver()
+                    if new_driver:
+                        self.available_drivers.put(new_driver)
+                        
         except Exception as e:
-            print(f"⚠️ Error returning driver to pool: {e}")
+            print(f"⚠️ Error returning driver: {e}")
             self._close_driver(driver)
+            self._handle_session_failure()
     
     def _is_driver_healthy(self, driver) -> bool:
-        """Check if driver is still functional"""
+        """Enhanced health check for driver"""
         try:
-            driver.current_url  # Simple health check
+            # Multiple health checks
+            _ = driver.current_url
+            _ = driver.title
+            _ = driver.window_handles
             return True
-        except Exception:
+        except Exception as e:
+            # Check if it's a session error
+            if "invalid session id" in str(e) or "session deleted" in str(e):
+                self._handle_session_failure()
             return False
     
     def _close_driver(self, driver):
-        """Safely close a driver"""
+        """Safely close a driver with enhanced error handling"""
         try:
             driver.quit()
         except Exception as e:
             print(f"⚠️ Error closing driver: {e}")
+            # Force close if regular quit fails
+            try:
+                driver.service.process.terminate()
+            except:
+                pass
     
     def cleanup(self):
         """Clean up all drivers in the pool"""
@@ -671,7 +765,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Max URLs: {MAX_URLS}\n"
         f"Check interval: {CHECK_INTERVAL}s\n"
         f"Parallel checks: {MAX_CONCURRENT_CHECKS}\n\n"
-        "✨ Now with enhanced filtering to reduce false positives!"
+        "✨ Fixed with JavaScript enabled for Zealy!"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -694,9 +788,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         status_lines.append("")
     
-    # Add driver pool status
+    # Add adaptive driver status
     if driver_pool:
-        status_lines.append(f"🔧 Driver pool: {driver_pool.available_drivers.qsize()}/{driver_pool.pool_size} available")
+        if driver_pool.use_fresh_drivers:
+            status_lines.append("🔧 Driver mode: FRESH (adaptive - session issues detected)")
+            status_lines.append(f"⚠️ Session failures: {driver_pool.session_failures_count}")
+        else:
+            status_lines.append(f"🔧 Driver pool: {driver_pool.available_drivers.qsize()}/{driver_pool.pool_size} available")
+            status_lines.append(f"📊 Session failures: {driver_pool.session_failures_count}")
+            
     status_lines.append(f"🔄 Monitoring: {'✅ Active' if is_monitoring else '❌ Stopped'}")
     
     message = "\n".join(status_lines)[:4000]
@@ -704,6 +804,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to see what content is being monitored for a URL"""
+    # Check if update and message exist
+    if not update or not update.message:
+        print("❌ Invalid update or missing message in debug_url")
+        return
+        
     if update.effective_chat.id != CHAT_ID:
         return
     
@@ -751,7 +856,10 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❌ Please provide a valid number")
     except Exception as e:
-        await update.message.reply_text(f"❌ Debug error: {str(e)}")
+        try:
+            await update.message.reply_text(f"❌ Debug error: {str(e)}")
+        except:
+            print(f"❌ Could not send debug error message: {str(e)}")
 
 async def sensitivity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adjust monitoring sensitivity"""
@@ -793,6 +901,11 @@ async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Check if update and message exist
+    if not update or not update.message:
+        print("❌ Invalid update or missing message in remove_url")
+        return
+        
     if update.effective_chat.id != CHAT_ID:
         return
     
@@ -827,9 +940,17 @@ async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         print(f"⚠️ Error in remove_url: {str(e)}")
-        await update.message.reply_text(f"❌ Error removing URL: {str(e)}")
+        try:
+            await update.message.reply_text(f"❌ Error removing URL: {str(e)}")
+        except:
+            print(f"❌ Could not send error message: {str(e)}")
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Check if update and message exist
+    if not update or not update.message:
+        print("❌ Invalid update or missing message in add_url")
+        return
+    
     if update.effective_chat.id != CHAT_ID:
         return
     
@@ -853,7 +974,7 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("ℹ️ URL already monitored")
             return
             
-        processing_msg = await update.message.reply_text("⏳ Verifying URL (fast check)...")
+        processing_msg = await update.message.reply_text("⏳ Verifying URL (with JavaScript enabled)...")
         
         try:
             # Use the fast hash function
@@ -887,13 +1008,23 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             print(f"❌ Error while getting initial hash: {str(e)}")
-            await processing_msg.edit_text(f"❌ Failed to add URL: {str(e)}")
+            if processing_msg:
+                try:
+                    await processing_msg.edit_text(f"❌ Failed to add URL: {str(e)}")
+                except:
+                    print(f"❌ Could not edit message: {str(e)}")
             
     except IndexError:
-        await update.message.reply_text("❌ Usage: /add <zealy-url>")
+        try:
+            await update.message.reply_text("❌ Usage: /add <zealy-url>")
+        except:
+            print("❌ Could not send usage message")
     except Exception as e:
         print(f"⚠️ Error in add_url: {str(e)}")
-        await update.message.reply_text(f"❌ Internal server error: {str(e)}")
+        try:
+            await update.message.reply_text(f"❌ Internal server error: {str(e)}")
+        except:
+            print(f"❌ Could not send error message: {str(e)}")
 
 async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
@@ -915,7 +1046,7 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ Enhanced monitoring started!\n"
             f"🔍 Checking {len(monitored_urls)} URLs every {CHECK_INTERVAL}s\n"
-            f"⚡ Parallel processing: {MAX_CONCURRENT_CHECKS} concurrent checks"
+            f"⚡ JavaScript enabled, {MAX_CONCURRENT_CHECKS} concurrent checks"
         )
         print("✅ Enhanced monitoring tasks created and started")
     except Exception as e:
@@ -948,7 +1079,7 @@ async def purge_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_monitoring(application: Application):
     global is_monitoring
     bot = application.bot
-    await send_notification(bot, "🔔 Enhanced monitoring started!", priority=True)
+    await send_notification(bot, "🔔 Enhanced monitoring started! (JS enabled)", priority=True)
     print("🔍 Entering enhanced monitoring loop")
     
     while is_monitoring:
@@ -979,7 +1110,7 @@ def main():
     try:
         global CHROME_PATH, CHROMEDRIVER_PATH, driver_pool
         
-        print(f"🚀 Starting enhanced bot at {datetime.now()}")
+        print(f"🚀 Starting enhanced bot (JS ENABLED) at {datetime.now()}")
         kill_previous_instances()
 
         print(f"🌍 Operating System: {platform.system()}")
@@ -988,6 +1119,7 @@ def main():
         print(f"💾 Chromedriver path: {CHROMEDRIVER_PATH}")
         print(f"⚡ Max concurrent checks: {MAX_CONCURRENT_CHECKS}")
         print(f"🔧 Driver pool size: {DRIVER_POOL_SIZE}")
+        print("🔴 JavaScript: ENABLED (required for Zealy)")
         
         if not IS_RENDER:
             print(f"📂 Chrome exists: {os.path.exists(CHROME_PATH)}")
@@ -1021,7 +1153,7 @@ def main():
                 print(f"📌 Using Chromedriver at: {CHROMEDRIVER_PATH}")
         
         # Initialize driver pool after paths are set
-        print("🔧 Initializing driver pool...")
+        print("🔧 Initializing adaptive driver pool...")
         driver_pool = DriverPool()
         
         if sys.platform == "win32":
@@ -1069,7 +1201,7 @@ def main():
         print("🧹 Cleanup complete")
 
 if __name__ == "__main__":
-    print("Enhanced script starting...")
+    print("Enhanced script starting (JS ENABLED)...")
     try:
         main()
     except Exception as e:
