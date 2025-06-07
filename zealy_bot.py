@@ -858,9 +858,10 @@ async def check_urls_parallel(bot):
 # Command handlers
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
-    print(f"🔍 Auth check: Received message from chat ID: {user_id}")
-    print(f"🔍 Auth check: Expected chat ID: {CHAT_ID}")
-    print(f"🔍 Auth check: Match: {user_id == CHAT_ID}")
+    print(f"🚨 EMERGENCY LOG: Message received from chat ID: {user_id}")
+    print(f"🚨 EMERGENCY LOG: Message text: {update.message.text if update.message else 'No text'}")
+    print(f"🚨 EMERGENCY LOG: Expected chat ID: {CHAT_ID}")
+    print(f"🚨 EMERGENCY LOG: Match: {user_id == CHAT_ID}")
     
     if user_id != CHAT_ID:
         print(f"🚫 Unauthorized access from chat ID: {user_id}")
@@ -870,6 +871,7 @@ async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"✅ Authorized access from chat ID: {user_id}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("🚨 EMERGENCY LOG: /start command received!")
     await update.message.reply_text(
         "🚀 Memory-Optimized Zealy Monitoring Bot\n\n"
         "Commands:\n"
@@ -1075,12 +1077,19 @@ async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"❌ Could not send error message: {str(e)}")
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("🚨 EMERGENCY LOG: /add command received!")
     # Check if update and message exist
     if not update or not update.message:
         print("❌ Invalid update or missing message in add_url")
         return
     
+    print(f"🔍 ADD_URL: Received request from chat ID: {update.effective_chat.id}")
+    print(f"🔍 ADD_URL: Expected chat ID: {CHAT_ID}")
+    print(f"🔍 ADD_URL: Auth check: {update.effective_chat.id == CHAT_ID}")
+    print(f"🔍 ADD_URL: Context args: {context.args}")
+    
     if update.effective_chat.id != CHAT_ID:
+        print(f"🚫 ADD_URL: Unauthorized access from {update.effective_chat.id}")
         return
     
     if len(monitored_urls) >= MAX_URLS:
@@ -1242,6 +1251,10 @@ def main():
         global CHROME_PATH, CHROMEDRIVER_PATH, driver_pool
         
         print(f"🚀 Starting memory-optimized bot (512MB RAM) at {datetime.now()}")
+        print(f"🚨 EMERGENCY CHECK: Script is running!")
+        print(f"🚨 EMERGENCY CHECK: Current working directory: {os.getcwd()}")
+        print(f"🚨 EMERGENCY CHECK: Python version: {sys.version}")
+        
         kill_previous_instances()
 
         print(f"🌍 Operating System: {platform.system()}")
@@ -1295,13 +1308,19 @@ def main():
         print(f"🤖 Bot token (first 10 chars): {TELEGRAM_BOT_TOKEN[:10]}...")
         print(f"💬 Target chat ID: {CHAT_ID}")
         
-        application = (
-            Application.builder()
-            .token(TELEGRAM_BOT_TOKEN)
-            .concurrent_updates(True)
-            .post_init(lambda app: app.bot.delete_webhook(drop_pending_updates=True))
-            .build()
-        )
+        # Test if we can create the application
+        try:
+            application = (
+                Application.builder()
+                .token(TELEGRAM_BOT_TOKEN)
+                .concurrent_updates(True)
+                .post_init(lambda app: app.bot.delete_webhook(drop_pending_updates=True))
+                .build()
+            )
+            print("✅ Telegram application created successfully")
+        except Exception as e:
+            print(f"❌ Failed to create Telegram application: {e}")
+            raise
 
         print("Adding handlers...")
         application.add_handler(MessageHandler(filters.ALL, auth_middleware), group=-1)
@@ -1323,6 +1342,10 @@ def main():
         print("🚀 Starting polling...")
         print(f"📡 Bot will respond to chat ID: {CHAT_ID}")
         print("✅ Bot is ready! Send /start to test.")
+        
+        # Remove the async bot test that was breaking the code
+        print("🧪 Bot connection will be tested when polling starts...")
+        
         application.run_polling()
         
     except KeyboardInterrupt:
