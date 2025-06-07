@@ -50,34 +50,67 @@ except ImportError as e:
     input("Press Enter to exit...")
     sys.exit(1)
 
+# DEFINE IS_RENDER FIRST - before any other environment checks
+IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
+
 # Try to load .env file
 print("Loading environment variables...")
 load_dotenv()
 
-# Check if env variables exist
+# Check if env variables exist with detailed debugging
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID_STR = os.getenv('CHAT_ID')
 
+print(f"🔍 Environment check:")
+print(f"   IS_RENDER: {IS_RENDER}")
+print(f"   TELEGRAM_BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}")
+print(f"   CHAT_ID exists: {bool(CHAT_ID_STR)}")
+
+if TELEGRAM_BOT_TOKEN:
+    print(f"   Bot token length: {len(TELEGRAM_BOT_TOKEN)} chars")
+    print(f"   Bot token starts with: {TELEGRAM_BOT_TOKEN[:10]}...")
+else:
+    print("   ❌ Bot token is None/empty")
+
+if CHAT_ID_STR:
+    print(f"   Chat ID value: {CHAT_ID_STR}")
+else:
+    print("   ❌ Chat ID is None/empty")
+
 if not TELEGRAM_BOT_TOKEN:
     print("ERROR: TELEGRAM_BOT_TOKEN environment variable is missing!")
-    print("Create a .env file in the same directory with:")
-    print("TELEGRAM_BOT_TOKEN=your_telegram_bot_token")
-    print("CHAT_ID=your_chat_id")
-    input("Press Enter to exit...")
+    if IS_RENDER:
+        print("On Render, set environment variables in your service settings:")
+        print("1. Go to your Render dashboard")
+        print("2. Click on your service")
+        print("3. Go to Environment tab")
+        print("4. Add: TELEGRAM_BOT_TOKEN=your_bot_token")
+        print("5. Add: CHAT_ID=your_chat_id")
+        print("6. Add: IS_RENDER=true")
+    else:
+        print("Create a .env file in the same directory with:")
+        print("TELEGRAM_BOT_TOKEN=your_telegram_bot_token")
+        print("CHAT_ID=your_chat_id")
+        input("Press Enter to exit...")
     sys.exit(1)
 
 if not CHAT_ID_STR:
     print("ERROR: CHAT_ID environment variable is missing!")
-    print("Create a .env file in the same directory with:")
-    print("CHAT_ID=your_chat_id (must be a number)")
-    input("Press Enter to exit...")
+    if IS_RENDER:
+        print("On Render, set CHAT_ID in your service environment variables")
+    else:
+        print("Create a .env file in the same directory with:")
+        print("CHAT_ID=your_chat_id (must be a number)")
+        input("Press Enter to exit...")
     sys.exit(1)
 
 try:
     CHAT_ID = int(CHAT_ID_STR)
+    print(f"✅ Chat ID parsed successfully: {CHAT_ID}")
 except ValueError:
     print(f"ERROR: CHAT_ID must be an integer, got: {CHAT_ID_STR}")
-    input("Press Enter to exit...")
+    if not IS_RENDER:
+        input("Press Enter to exit...")
     sys.exit(1)
 
 # Automatic chromedriver installation
@@ -90,19 +123,17 @@ except Exception as e:
     print("We'll try to use existing Chrome/ChromeDriver")
 
 # OPTIMIZED Configuration for 512MB RAM
-CHECK_INTERVAL = 30  
-MAX_URLS = 10  
+CHECK_INTERVAL = 30  # Increased interval to reduce memory pressure
+MAX_URLS = 10  # Reduced from 20 to limit operations
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
 REQUEST_TIMEOUT = 15  # Reduced timeout
-MAX_CONCURRENT_CHECKS = 1  
-DRIVER_POOL_SIZE = 1  
-MAX_RETRIES = 2  
-RETRY_DELAY_BASE = 3  
-FAILURE_THRESHOLD = 5  #
+MAX_CONCURRENT_CHECKS = 1  # CRITICAL: Only 1 concurrent check for 512MB RAM
+DRIVER_POOL_SIZE = 1  # Only 1 driver in pool to save memory
+MAX_RETRIES = 2  # Reduced retries
+RETRY_DELAY_BASE = 3  # Longer delays between retries
+FAILURE_THRESHOLD = 5  # Lower threshold for faster removal
 
-# Set appropriate paths based on environment
-IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
-
+# Set Chrome/ChromeDriver paths now that IS_RENDER is defined
 if IS_RENDER:
     CHROME_PATH = '/usr/bin/chromium'
     CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
@@ -826,9 +857,17 @@ async def check_urls_parallel(bot):
 
 # Command handlers
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != CHAT_ID:
-        await update.message.reply_text("🚫 Unauthorized access!")
+    user_id = update.effective_chat.id
+    print(f"🔍 Auth check: Received message from chat ID: {user_id}")
+    print(f"🔍 Auth check: Expected chat ID: {CHAT_ID}")
+    print(f"🔍 Auth check: Match: {user_id == CHAT_ID}")
+    
+    if user_id != CHAT_ID:
+        print(f"🚫 Unauthorized access from chat ID: {user_id}")
+        await update.message.reply_text(f"🚫 Unauthorized access! Your chat ID: {user_id}")
         raise ApplicationHandlerStop
+    else:
+        print(f"✅ Authorized access from chat ID: {user_id}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -878,7 +917,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_lines.append(f"🔧 Driver pool: {driver_pool.available_drivers.qsize()}/{driver_pool.pool_size} available")
             status_lines.append(f"📊 Session failures: {driver_pool.session_failures_count}")
             
-    status_lines.append(f"💾 Memory limit: {128 if IS_RENDER else 256}MB heap")
+    status_lines.append(f"💾 Memory limit: {256 if IS_RENDER else 512}MB heap")
     status_lines.append(f"🔄 Monitoring: {'✅ Active' if is_monitoring else '❌ Stopped'}")
     
     message = "\n".join(status_lines)[:4000]
@@ -965,7 +1004,7 @@ async def sensitivity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Memory optimizations:",
         f"💾 Max URLs: {MAX_URLS} (reduced for 512MB RAM)",
         f"💾 Sequential processing (no parallel checks)",
-        f"💾 Heap limit: {128 if IS_RENDER else 256}MB",
+        f"💾 Heap limit: {256 if IS_RENDER else 512}MB",
         f"💾 Reduced timeouts and retries",
         "",
         "If you're still getting false positives:",
@@ -1138,7 +1177,7 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Memory-optimized monitoring started!\n"
             f"🔍 Checking {len(monitored_urls)} URLs every {CHECK_INTERVAL}s\n"
             f"💾 Sequential processing for 512MB RAM\n"
-            f"⚡ Heap limit: {128 if IS_RENDER else 256}MB"
+            f"⚡ Heap limit: {256 if IS_RENDER else 512}MB"
         )
         print("✅ Memory-optimized monitoring tasks created and started")
     except Exception as e:
@@ -1211,7 +1250,7 @@ def main():
         print(f"💾 Chromedriver path: {CHROMEDRIVER_PATH}")
         print(f"⚡ Max concurrent checks: {MAX_CONCURRENT_CHECKS} (sequential)")
         print(f"🔧 Driver pool size: {DRIVER_POOL_SIZE}")
-        print(f"💾 Memory optimization: {128 if IS_RENDER else 256}MB heap limit")
+        print(f"💾 Memory optimization: {256 if IS_RENDER else 512}MB heap limit")
         print("🔴 JavaScript: ENABLED (required for Zealy)")
         
         if not IS_RENDER:
@@ -1253,6 +1292,9 @@ def main():
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
         print("Creating Telegram application...")
+        print(f"🤖 Bot token (first 10 chars): {TELEGRAM_BOT_TOKEN[:10]}...")
+        print(f"💬 Target chat ID: {CHAT_ID}")
+        
         application = (
             Application.builder()
             .token(TELEGRAM_BOT_TOKEN)
@@ -1278,7 +1320,9 @@ def main():
         for handler in handlers:
             application.add_handler(handler)
 
-        print("Starting polling...")
+        print("🚀 Starting polling...")
+        print(f"📡 Bot will respond to chat ID: {CHAT_ID}")
+        print("✅ Bot is ready! Send /start to test.")
         application.run_polling()
         
     except KeyboardInterrupt:
