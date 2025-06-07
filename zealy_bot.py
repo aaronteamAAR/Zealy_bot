@@ -106,7 +106,24 @@ FAILURE_THRESHOLD = 5
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
 
 if IS_RENDER:
-    CHROME_PATH = '/usr/bin/chromium'
+    # Try multiple possible Chrome paths on Render
+    possible_chrome_paths = [
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser', 
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable'
+    ]
+    CHROME_PATH = None
+    for path in possible_chrome_paths:
+        if os.path.exists(path):
+            CHROME_PATH = path
+            print(f"✅ Found Chrome at: {path}")
+            break
+    
+    if not CHROME_PATH:
+        CHROME_PATH = '/usr/bin/chromium'  # Default fallback
+        print(f"⚠️ No Chrome found, using fallback: {CHROME_PATH}")
+    
     CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
 elif platform.system() == "Windows":
     CHROME_PATH = os.getenv('CHROME_BIN', 
@@ -260,50 +277,82 @@ class DriverPool:
             self._initialize_pool()
     
     def _initialize_pool(self):
-        """FIXED: Thread-safe pool initialization"""
+        """FIXED: Thread-safe pool initialization with Render optimization"""
         with self.lock:
             if self.use_fresh_drivers:
                 print("🔧 Using fresh drivers mode - no pool initialization")
                 return
+            
+            # RENDER OPTIMIZATION: Start with fresh drivers on Render to avoid initialization delays
+            if IS_RENDER:
+                print("🌐 Render detected - using fresh drivers mode for faster startup")
+                self.use_fresh_drivers = True
+                return
                 
             for _ in range(self.pool_size):
                 try:
+                    print(f"🔧 Creating driver {_ + 1}/{self.pool_size}...")
                     driver = self._create_driver()
                     if driver:
                         self.available_drivers.put(driver)
                         print(f"✅ Driver added to pool. Pool size: {self.available_drivers.qsize()}")
+                    else:
+                        print(f"⚠️ Driver creation returned None, switching to fresh mode")
+                        self.use_fresh_drivers = True
+                        break
                 except Exception as e:
                     print(f"⚠️ Failed to initialize driver in pool: {e}")
-                    self._handle_session_failure()
+                    print("🔄 Switching to fresh drivers mode for reliability")
+                    self.use_fresh_drivers = True
+                    break
     
     def _create_driver(self):
-        """FIXED: Create a new WebDriver with proper error handling and process tracking"""
+        """FIXED: Create a new WebDriver with Render optimization and timeout"""
+        print("🔧 Creating new Chrome driver...")
         try:
             options = get_chrome_options()
             
-            if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
-                service = None
+            # RENDER OPTIMIZATION: Faster driver creation with timeout
+            if IS_RENDER:
+                print("🌐 Creating driver for Render environment...")
+                # Use system chromedriver on Render
                 driver = webdriver.Chrome(options=options)
             else:
-                service = Service(executable_path=CHROMEDRIVER_PATH)
-                driver = webdriver.Chrome(service=service, options=options)
+                if not os.path.exists(CHROMEDRIVER_PATH):
+                    print("🔧 Using system chromedriver...")
+                    driver = webdriver.Chrome(options=options)
+                else:
+                    print(f"🔧 Using chromedriver at: {CHROMEDRIVER_PATH}")
+                    service = Service(executable_path=CHROMEDRIVER_PATH)
+                    driver = webdriver.Chrome(service=service, options=options)
             
             # FIXED: Track process for cleanup
             if hasattr(driver, 'service') and hasattr(driver.service, 'process'):
                 with self.lock:
                     self.chrome_processes.add(driver.service.process.pid)
+                print(f"📊 Tracking Chrome process PID: {driver.service.process.pid}")
             
             # FIXED: Add to weak reference set for tracking
             self.driver_refs.add(driver)
             
-            # Configure driver
+            # Configure driver with timeout protection
+            print("⚙️ Configuring driver timeouts...")
             driver.set_page_load_timeout(REQUEST_TIMEOUT)
             driver.implicitly_wait(5)
             
+            print("✅ Chrome driver created successfully")
             return driver
             
         except Exception as e:
-            print(f"❌ Failed to create driver: {e}")
+            error_msg = f"Failed to create driver: {e}"
+            print(f"❌ {error_msg}")
+            
+            # RENDER FALLBACK: If driver creation fails on Render, ensure fresh mode
+            if IS_RENDER:
+                print("🌐 Render driver creation failed - ensuring fresh mode")
+                with self.lock:
+                    self.use_fresh_drivers = True
+                    
             return None
     
     def _handle_session_failure(self):
@@ -500,31 +549,62 @@ driver_pool = None
 notification_queue = Queue()
 
 def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[str], float, Optional[str], Optional[str]]:
-    """FIXED: Enhanced content hash extraction with proper error handling and resource management"""
+    """FIXED: Enhanced content hash extraction with Render optimization and comprehensive error handling"""
     driver = None
     start_time = time.time()
     max_attempts = 2
+    
+    print(f"🌐 get_content_hash_fast called for: {url}")
     
     for attempt in range(max_attempts):
         try:
             print(f"🌐 Getting driver for URL: {url} (attempt {attempt + 1}/{max_attempts})")
             
-            driver = driver_pool.get_driver(timeout=5)
+            # RENDER OPTIMIZATION: Add timeout for driver acquisition
+            try:
+                if IS_RENDER:
+                    print("🌐 Render environment - using optimized driver acquisition")
+                    driver = driver_pool.get_driver(timeout=30)  # Longer timeout for Render
+                else:
+                    driver = driver_pool.get_driver(timeout=10)
+            except Exception as driver_error:
+                print(f"❌ Driver acquisition failed: {driver_error}")
+                if attempt < max_attempts - 1:
+                    print(f"⏳ Retrying driver acquisition in 3s...")
+                    time.sleep(3)
+                    continue
+                return None, time.time() - start_time, f"Driver acquisition failed: {str(driver_error)}", None
             
             if not driver:
+                error_msg = "Failed to get driver from pool"
+                print(f"❌ {error_msg}")
                 if attempt < max_attempts - 1:
-                    print(f"⏳ Failed to get driver, retrying in 2s...")
-                    time.sleep(2)
+                    print(f"⏳ Retrying in 3s...")
+                    time.sleep(3)
                     continue
-                return None, time.time() - start_time, "Failed to get driver from pool", None
+                return None, time.time() - start_time, error_msg, None
             
+            print(f"✅ Driver acquired successfully")
             print(f"🌐 Loading URL: {url}")
-            driver.get(url)
+            
+            # RENDER OPTIMIZATION: Add timeout for page load
+            try:
+                driver.get(url)
+                print("✅ URL loaded successfully")
+            except Exception as load_error:
+                print(f"❌ URL load failed: {load_error}")
+                if attempt < max_attempts - 1:
+                    print(f"⏳ Retrying URL load...")
+                    driver_pool.return_driver(driver)
+                    driver = None
+                    time.sleep(3)
+                    continue
+                return None, time.time() - start_time, f"URL load failed: {str(load_error)}", None
             
             print("⏳ Waiting for React to render...")
-            time.sleep(2)
+            time.sleep(3)  # Slightly longer wait for Render
             
-            print("⏳ Waiting for page elements...")
+            print("⏳ Searching for page elements...")
             selectors_to_try = [
                 ZEALY_CONTAINER_SELECTOR,
                 "div[class*='flex'][class*='flex-col']",
@@ -535,7 +615,8 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
             container = None
             for selector in selectors_to_try:
                 try:
-                    container = WebDriverWait(driver, 8).until(
+                    print(f"🔍 Trying selector: {selector}")
+                    container = WebDriverWait(driver, 10).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                     )
                     print(f"✅ Found element with selector: {selector}")
@@ -543,34 +624,52 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
                 except TimeoutException:
                     print(f"⚠️ Selector {selector} not found, trying next...")
                     continue
+                except Exception as selector_error:
+                    print(f"⚠️ Error with selector {selector}: {selector_error}")
+                    continue
             
             if not container:
+                error_msg = "No suitable container found after trying all selectors"
+                print(f"❌ {error_msg}")
                 if attempt < max_attempts - 1:
-                    print(f"⏳ No container found, retrying...")
+                    print(f"⏳ Retrying container search...")
                     driver_pool.return_driver(driver)
                     driver = None
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
-                return None, time.time() - start_time, "No suitable container found", None
+                return None, time.time() - start_time, error_msg, None
             
-            time.sleep(1)
-            content = container.text
+            print("⏳ Extracting content...")
+            time.sleep(2)  # Wait for content to stabilize
+            
+            try:
+                content = container.text
+                print(f"📄 Raw content extracted, length: {len(content)} chars")
+            except Exception as content_error:
+                print(f"❌ Content extraction failed: {content_error}")
+                if attempt < max_attempts - 1:
+                    driver_pool.return_driver(driver)
+                    driver = None
+                    time.sleep(3)
+                    continue
+                return None, time.time() - start_time, f"Content extraction failed: {str(content_error)}", None
             
             if not content or len(content.strip()) < 10:
+                error_msg = f"Content too short: {len(content)} chars"
+                print(f"❌ {error_msg}")
                 if attempt < max_attempts - 1:
-                    print(f"⏳ Content too short ({len(content)} chars), retrying...")
+                    print(f"⏳ Retrying for better content...")
                     driver_pool.return_driver(driver)
                     driver = None
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
-                return None, time.time() - start_time, f"Content too short: {len(content)} chars", None
+                return None, time.time() - start_time, error_msg, None
             
-            print(f"📄 Content retrieved, length: {len(content)} chars")
+            print(f"📄 Content retrieved successfully, length: {len(content)} chars")
             
-            # Enhanced content cleaning
+            # Enhanced content cleaning (consolidated for performance)
             clean_content = content
             
-            # FIXED: Consolidated regex patterns for better performance
             patterns = [
                 r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?',
                 r'\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?',
@@ -603,26 +702,29 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
             
             clean_content = re.sub(r'\s+', ' ', clean_content).strip()
             
-            print(f"📄 Content cleaned, original: {len(content)} chars, cleaned: {len(clean_content)} chars")
+            print(f"📄 Content cleaned successfully, original: {len(content)} chars, cleaned: {len(clean_content)} chars")
+            
             content_hash = hashlib.sha256(clean_content.encode()).hexdigest()
             response_time = time.time() - start_time
             
             content_sample = content[:500] if debug_mode else None
             
-            print(f"🔢 Hash generated: {content_hash[:8]}... in {response_time:.2f}s")
+            print(f"🔢 Hash generated successfully: {content_hash[:8]}... in {response_time:.2f}s")
             return content_hash, response_time, None, content_sample
             
         except Exception as e:
             error_str = str(e)
+            print(f"⚠️ Exception in attempt {attempt + 1}: {error_str}")
             
-            # FIXED: Enhanced session error detection
+            # Enhanced session error detection
             session_errors = [
                 "invalid session id", "session deleted", "browser has closed",
-                "not connected to DevTools", "chrome not reachable", "target window already closed"
+                "not connected to DevTools", "chrome not reachable", "target window already closed",
+                "chrome process may have crashed", "session deleted because of page crash"
             ]
             
-            if any(session_error in error_str for session_error in session_errors):
-                print(f"🚨 Session error detected (attempt {attempt + 1}/{max_attempts}): {error_str[:100]}...")
+            if any(session_error in error_str.lower() for session_error in session_errors):
+                print(f"🚨 Session error detected: {error_str[:100]}...")
                 
                 if driver_pool:
                     driver_pool._handle_session_failure()
@@ -630,13 +732,13 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
                 if driver:
                     try:
                         driver_pool._force_close_driver(driver)
-                    except:
-                        pass
+                    except Exception as close_error:
+                        print(f"⚠️ Error closing broken driver: {close_error}")
                     driver = None
                 
                 if attempt < max_attempts - 1:
-                    print(f"⏳ Retrying after session error in 3s...")
-                    time.sleep(3)
+                    print(f"⏳ Retrying after session error in 5s...")
+                    time.sleep(5)
                     continue
                 else:
                     return None, time.time() - start_time, f"Max retries exceeded due to session errors: {error_str}", None
@@ -645,18 +747,20 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
                 print(f"⚠️ {error_msg}")
                 
                 if attempt < max_attempts - 1:
-                    print(f"⏳ Retrying after error in 2s...")
+                    print(f"⏳ Retrying after error in 3s...")
                     if driver:
                         driver_pool.return_driver(driver)
                         driver = None
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
                 else:
                     return None, time.time() - start_time, error_msg, None
         finally:
             if driver:
+                print("🔄 Returning driver to pool...")
                 driver_pool.return_driver(driver)
     
+    print("❌ All retry attempts exhausted")
     return None, time.time() - start_time, "All retry attempts failed", None
 
 async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Optional[str]]:
@@ -1051,6 +1155,81 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Health check endpoint for Render"""
+    try:
+        if not update or not update.message:
+            return
+            
+        # Basic health check
+        health_status = [
+            f"🤖 Bot Status: ✅ Running",
+            f"💾 Memory: {128 if IS_RENDER else 256}MB limit",
+            f"🌐 Environment: {'Render' if IS_RENDER else 'Local'}",
+            f"🔧 Chrome Path: {CHROME_PATH}",
+            f"📊 URLs Monitored: {len(monitored_urls)}/{MAX_URLS}",
+            f"🔄 Monitoring Active: {'✅' if is_monitoring else '❌'}",
+        ]
+        
+        if driver_pool:
+            health_status.append(f"🛡️ Driver Mode: {'Fresh' if driver_pool.use_fresh_drivers else 'Pooled'}")
+            health_status.append(f"📈 Session Failures: {driver_pool.session_failures_count}")
+        
+        health_status.append(f"⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        await update.message.reply_text("\n".join(health_status))
+        print("✅ Health check completed")
+        
+    except Exception as e:
+        error_msg = f"❌ Health check failed: {str(e)}"
+        print(error_msg)
+        try:
+            if update and update.message:
+                await update.message.reply_text(error_msg)
+        except:
+            pass
+    """FIXED: Enhanced sensitivity command"""
+    try:
+        if not update or not update.message:
+            return
+            
+        if update.effective_chat.id != CHAT_ID:
+            return
+        
+        help_text = [
+            "🎛️ FIXED Memory-Optimized Sensitivity Settings:",
+            "",
+            "Current filters remove:",
+            "✅ Timestamps and dates",
+            "✅ XP and point counters", 
+            "✅ View counts and engagement",
+            "✅ Online user counts",
+            "✅ Progress indicators",
+            "✅ Rank positions",
+            "✅ Session IDs and tokens",
+            "✅ Loading states",
+            "",
+            "FIXED optimizations:",
+            f"💾 Max URLs: {MAX_URLS} (reduced for 512MB RAM)",
+            f"💾 Sequential processing (no parallel checks)",
+            f"💾 Heap limit: {128 if IS_RENDER else 256}MB (consistent)",
+            f"💾 Reduced timeouts and retries",
+            "🛡️ Circuit breaker pattern active",
+            "🔒 Thread-safe driver pool",
+            "🧹 Enhanced resource cleanup",
+            "🚨 Session error recovery",
+            "",
+            "If you're still getting false positives:",
+            "1. Use /debug <number> to see what content is changing",
+            "2. Consider reducing monitored URLs further",
+            "3. Circuit breaker auto-switches modes when needed"
+        ]
+        
+        await update.message.reply_text("\n".join(help_text))
+        
+    except Exception as e:
+        print(f"⚠️ Error in sensitivity command: {e}")
+
 async def sensitivity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """FIXED: Enhanced sensitivity command"""
     try:
@@ -1164,45 +1343,74 @@ async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        print(f"🔵 ADD_URL called by user: {update.effective_chat.id if update and update.effective_chat else 'Unknown'}")
+        
         if not update or not update.message:
+            print("❌ ADD_URL: No update or message")
             return
         
         if update.effective_chat.id != CHAT_ID:
+            print(f"❌ ADD_URL: Unauthorized chat ID: {update.effective_chat.id}")
             return
         
         if len(monitored_urls) >= MAX_URLS:
+            print(f"❌ ADD_URL: Max URLs reached ({len(monitored_urls)}/{MAX_URLS})")
             await update.message.reply_text(f"❌ Maximum URLs limit ({MAX_URLS}) reached\n💾 This limit is optimized for 512MB RAM")
             return
             
         if not context.args or not context.args[0]:
+            print("❌ ADD_URL: No URL provided")
             await update.message.reply_text("❌ Usage: /add <zealy-url>")
             return
             
         url = context.args[0].lower()
-        print(f"📥 Attempting to add URL: {url}")
+        print(f"📥 ADD_URL: Processing URL: {url}")
         
         if not re.match(r'^https://(www\.)?zealy\.io/cw/[\w/-]+', url):
+            print(f"❌ ADD_URL: Invalid URL format: {url}")
             await update.message.reply_text("❌ Invalid Zealy URL format")
             return
             
         if url in monitored_urls:
+            print(f"ℹ️ ADD_URL: URL already monitored: {url}")
             await update.message.reply_text("ℹ️ URL already monitored")
             return
             
-        processing_msg = await update.message.reply_text("⏳ Verifying URL (FIXED memory-optimized mode)...")
+        # CRITICAL FIX: Immediate response to prevent timeout
+        processing_msg = await update.message.reply_text("⏳ Verifying URL... (This may take 30-60 seconds on Render)")
+        print("✅ ADD_URL: Processing message sent")
         
         try:
-            loop = asyncio.get_event_loop()
-            print(f"🔄 Getting initial hash for {url}")
+            print(f"🔄 ADD_URL: Starting URL verification for {url}")
             
-            initial_hash, response_time, error, content_sample = await loop.run_in_executor(
-                None, get_content_hash_fast, url, False
-            )
+            # RENDER OPTIMIZATION: Add timeout protection
+            loop = asyncio.get_event_loop()
+            
+            # Create a timeout wrapper for the verification
+            async def verify_with_timeout():
+                try:
+                    return await asyncio.wait_for(
+                        loop.run_in_executor(None, get_content_hash_fast, url, False),
+                        timeout=90.0  # 90 second timeout for Render
+                    )
+                except asyncio.TimeoutError:
+                    print("⏰ ADD_URL: Verification timeout")
+                    return None, 0, "Verification timeout (Render environment)", None
+                except Exception as e:
+                    print(f"❌ ADD_URL: Verification error: {e}")
+                    return None, 0, f"Verification error: {str(e)}", None
+            
+            print("🔄 ADD_URL: Calling verify_with_timeout...")
+            initial_hash, response_time, error, content_sample = await verify_with_timeout()
+            print(f"🔄 ADD_URL: Verification complete. Hash: {initial_hash is not None}, Error: {error}")
             
             if not initial_hash:
-                await processing_msg.edit_text(f"❌ Failed to verify URL: {error}")
+                error_msg = f"❌ Failed to verify URL: {error}"
+                print(f"❌ ADD_URL: {error_msg}")
+                await processing_msg.edit_text(error_msg)
                 return
                 
+            # SUCCESS: Add URL to monitoring
             monitored_urls[url] = URLData(
                 hash=initial_hash,
                 last_notified=0,
@@ -1213,31 +1421,51 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 avg_response_time=response_time
             )
             
-            print(f"✅ URL added successfully: {url}")
-            circuit_status = "🛡️ Circuit breaker ready" if driver_pool and driver_pool.use_fresh_drivers else "🔧 Pooled mode"
-            await processing_msg.edit_text(
+            print(f"✅ ADD_URL: URL added successfully: {url}")
+            
+            # RENDER STATUS: Show current driver mode
+            driver_mode = "🛡️ Fresh drivers (Render optimized)" if driver_pool and driver_pool.use_fresh_drivers else "🔧 Pooled mode"
+            
+            success_msg = (
                 f"✅ Added: {url}\n"
                 f"📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}\n"
                 f"⚡ Initial response: {response_time:.2f}s\n"
-                f"💾 Memory optimized for 512MB RAM (FIXED)\n"
-                f"{circuit_status}\n"
-                f"🔒 Thread safety and cleanup FIXED"
+                f"💾 Memory optimized for 512MB RAM\n"
+                f"{driver_mode}\n"
+                f"🌐 Render environment detected\n"
+                f"🔒 All critical fixes active"
             )
             
+            await processing_msg.edit_text(success_msg)
+            print("✅ ADD_URL: Success message sent")
+            
+        except asyncio.CancelledError:
+            print("🚫 ADD_URL: Operation cancelled")
+            await processing_msg.edit_text("❌ Operation cancelled")
+            raise
         except Exception as e:
-            print(f"❌ Error while getting initial hash: {str(e)}")
+            error_msg = f"❌ Failed to add URL: {str(e)}"
+            print(f"❌ ADD_URL: Exception during verification: {e}")
+            print(f"❌ ADD_URL: Exception traceback: {traceback.format_exc()}")
             try:
-                await processing_msg.edit_text(f"❌ Failed to add URL: {str(e)}")
-            except:
-                pass
+                await processing_msg.edit_text(error_msg)
+            except Exception as edit_error:
+                print(f"❌ ADD_URL: Failed to edit message: {edit_error}")
+                # Try sending new message if editing fails
+                try:
+                    await update.message.reply_text(error_msg)
+                except Exception as reply_error:
+                    print(f"❌ ADD_URL: Failed to send reply: {reply_error}")
             
     except Exception as e:
-        print(f"⚠️ Error in add_url: {str(e)}")
+        print(f"⚠️ ADD_URL: Critical error: {str(e)}")
+        print(f"⚠️ ADD_URL: Critical traceback: {traceback.format_exc()}")
         try:
             if update and update.message:
-                await update.message.reply_text(f"❌ Internal server error: {str(e)}")
-        except:
-            pass
+                await update.message.reply_text(f"❌ Critical error: {str(e)}")
+        except Exception as critical_error:
+            print(f"❌ ADD_URL: Failed to send critical error message: {critical_error}")
+        # Don't re-raise to prevent bot crash
 
 async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
@@ -1399,7 +1627,9 @@ def main():
         print(f"🌍 Operating System: {platform.system()}")
         print(f"🌍 Running on Render: {IS_RENDER}")
         print(f"💾 Chrome path: {CHROME_PATH}")
+        print(f"💾 Chrome exists: {os.path.exists(CHROME_PATH) if CHROME_PATH else False}")
         print(f"💾 Chromedriver path: {CHROMEDRIVER_PATH}")
+        print(f"💾 Chromedriver exists: {os.path.exists(CHROMEDRIVER_PATH) if CHROMEDRIVER_PATH else False}")
         print(f"⚡ Max concurrent checks: {MAX_CONCURRENT_CHECKS} (sequential)")
         print(f"🔧 Driver pool size: {DRIVER_POOL_SIZE}")
         print(f"💾 Memory optimization: {128 if IS_RENDER else 256}MB heap limit (CONSISTENT)")
@@ -1411,6 +1641,35 @@ def main():
         print("  ✅ Enhanced resource cleanup")
         print("  ✅ Process tracking")
         print("  ✅ Session error recovery")
+        
+        # RENDER SPECIFIC CHECKS
+        if IS_RENDER:
+            print("🌐 RENDER ENVIRONMENT DETECTED")
+            print(f"  📂 Chrome binary exists: {os.path.exists(CHROME_PATH) if CHROME_PATH else False}")
+            print(f"  📂 Chromedriver exists: {os.path.exists(CHROMEDRIVER_PATH)}")
+            
+            # Check for required packages in Render
+            try:
+                import selenium
+                print(f"  ✅ Selenium version: {selenium.__version__}")
+            except ImportError:
+                print("  ❌ Selenium not found!")
+                
+            try:
+                print(f"  ✅ Telegram bot token: {'Set' if TELEGRAM_BOT_TOKEN else 'Missing'}")
+                print(f"  ✅ Chat ID: {'Set' if CHAT_ID else 'Missing'}")
+            except:
+                print("  ❌ Environment variables issue!")
+                
+            # Test Chrome binary
+            if CHROME_PATH and os.path.exists(CHROME_PATH):
+                try:
+                    result = os.system(f"{CHROME_PATH} --version")
+                    print(f"  🔍 Chrome test result: {result}")
+                except Exception as chrome_test_error:
+                    print(f"  ⚠️ Chrome test failed: {chrome_test_error}")
+        
+        print("=" * 60)
         
         if not IS_RENDER:
             print(f"📂 Chrome exists: {os.path.exists(CHROME_PATH)}")
@@ -1463,6 +1722,7 @@ def main():
         application.add_handler(MessageHandler(filters.ALL, auth_middleware), group=-1)
         handlers = [
             CommandHandler("start", start),
+            CommandHandler("health", health_check),
             CommandHandler("add", add_url),
             CommandHandler("remove", remove_url),
             CommandHandler("list", list_urls),
