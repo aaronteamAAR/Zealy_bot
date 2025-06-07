@@ -8,7 +8,6 @@ import traceback
 import sys
 from datetime import datetime
 import platform
-from collections import deque
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
 import threading
@@ -49,66 +48,76 @@ except ImportError as e:
         input("Press Enter to exit...")
     sys.exit(1)
 
-# DEFINE IS_RENDER FIRST - before any other environment checks
+# DEFINE IS_RENDER FIRST
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
 
-# Try to load .env file
-print("Loading environment variables...")
-load_dotenv()
+print(f"🚀 Starting Zealy Bot - {'Render' if IS_RENDER else 'Local'} Mode")
+print(f"📍 Working directory: {os.getcwd()}")
+print(f"🐍 Python version: {sys.version}")
 
-# Check if env variables exist with detailed debugging
+# Load environment variables
+if not IS_RENDER:
+    print("Loading .env file...")
+    load_dotenv()
+
+print("🔍 Loading environment variables...")
+
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID_STR = os.getenv('CHAT_ID')
 
-print(f"🔍 Environment check:")
+print(f"✅ Environment Check:")
 print(f"   IS_RENDER: {IS_RENDER}")
-print(f"   TELEGRAM_BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}")
+print(f"   BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}")
 print(f"   CHAT_ID exists: {bool(CHAT_ID_STR)}")
 
 if TELEGRAM_BOT_TOKEN:
-    print(f"   Bot token length: {len(TELEGRAM_BOT_TOKEN)} chars")
-    print(f"   Bot token starts with: {TELEGRAM_BOT_TOKEN[:10]}...")
-else:
-    print("   ❌ Bot token is None/empty")
+    print(f"   Bot token length: {len(TELEGRAM_BOT_TOKEN)}")
+    print(f"   Bot token preview: {TELEGRAM_BOT_TOKEN[:10]}...")
 
 if CHAT_ID_STR:
-    print(f"   Chat ID value: {CHAT_ID_STR}")
-else:
-    print("   ❌ Chat ID is None/empty")
+    print(f"   Chat ID value: '{CHAT_ID_STR}'")
 
+# Check for missing variables
+missing_vars = []
 if not TELEGRAM_BOT_TOKEN:
-    print("ERROR: TELEGRAM_BOT_TOKEN environment variable is missing!")
+    missing_vars.append("TELEGRAM_BOT_TOKEN")
+if not CHAT_ID_STR:
+    missing_vars.append("CHAT_ID")
+
+if missing_vars:
+    print(f"\n❌ Missing environment variables: {', '.join(missing_vars)}")
     if IS_RENDER:
-        print("On Render, set environment variables in your service settings:")
+        print("\n🔧 Render Setup Instructions:")
         print("1. Go to your Render dashboard")
         print("2. Click on your service")
         print("3. Go to Environment tab")
-        print("4. Add: TELEGRAM_BOT_TOKEN=your_bot_token")
-        print("5. Add: CHAT_ID=your_chat_id")
-        print("6. Add: IS_RENDER=true")
+        print("4. Add these variables:")
+        for var in missing_vars:
+            if var == "TELEGRAM_BOT_TOKEN":
+                print(f"   {var} = your_bot_token_from_@BotFather")
+            elif var == "CHAT_ID":
+                print(f"   {var} = your_chat_id_number")
+        print("5. Save and redeploy")
     else:
-        print("Create a .env file in the same directory with:")
-        print("TELEGRAM_BOT_TOKEN=your_telegram_bot_token")
-        print("CHAT_ID=your_chat_id")
-        input("Press Enter to exit...")
-    sys.exit(1)
-
-if not CHAT_ID_STR:
-    print("ERROR: CHAT_ID environment variable is missing!")
-    if IS_RENDER:
-        print("On Render, set CHAT_ID in your service environment variables")
-    else:
-        print("Create a .env file in the same directory with:")
-        print("CHAT_ID=your_chat_id (must be a number)")
+        print("\n🔧 Local Setup Instructions:")
+        print("Create a .env file with:")
+        for var in missing_vars:
+            if var == "TELEGRAM_BOT_TOKEN":
+                print(f"{var}=your_bot_token")
+            elif var == "CHAT_ID":
+                print(f"{var}=your_chat_id")
+    
+    print(f"\n💡 After adding variables, restart the bot")
+    if not IS_RENDER:
         input("Press Enter to exit...")
     sys.exit(1)
 
 # Parse CHAT_ID
 try:
     CHAT_ID = int(CHAT_ID_STR)
-    print(f"✅ Chat ID parsed successfully: {CHAT_ID}")
+    print(f"✅ Chat ID parsed: {CHAT_ID}")
 except ValueError:
-    print(f"ERROR: CHAT_ID must be an integer, got: {CHAT_ID_STR}")
+    print(f"❌ CHAT_ID must be a number, got: '{CHAT_ID_STR}'")
     if not IS_RENDER:
         input("Press Enter to exit...")
     sys.exit(1)
@@ -120,38 +129,27 @@ try:
         chromedriver_autoinstaller.install()
         print("✅ ChromeDriver installed")
 except Exception as e:
-    print(f"Warning: ChromeDriver auto-installation failed: {e}")
-    print("We'll try to use existing Chrome/ChromeDriver")
+    print(f"⚠️ ChromeDriver auto-install warning: {e}")
 
-# OPTIMIZED Configuration for 512MB RAM
-CHECK_INTERVAL = 30  # Increased interval to reduce memory pressure
-MAX_URLS = 10  # Reduced from 20 to limit operations
+# Configuration
+CHECK_INTERVAL = 30
+MAX_URLS = 10
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
-REQUEST_TIMEOUT = 15  # Reduced timeout
-MAX_CONCURRENT_CHECKS = 1  # CRITICAL: Only 1 concurrent check for 512MB RAM
-DRIVER_POOL_SIZE = 1  # Only 1 driver in pool to save memory
-MAX_RETRIES = 2  # Reduced retries
-RETRY_DELAY_BASE = 3  # Longer delays between retries
-FAILURE_THRESHOLD = 5  # Lower threshold for faster removal
+REQUEST_TIMEOUT = 15
+MAX_RETRIES = 2
+RETRY_DELAY_BASE = 3
+FAILURE_THRESHOLD = 5
 
-# Set Chrome/ChromeDriver paths now that IS_RENDER is defined
+# Set Chrome paths
 if IS_RENDER:
-    # Render.com specific paths
     CHROME_PATH = '/usr/bin/chromium'
     CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
 elif platform.system() == "Windows":
-    CHROME_PATH = os.getenv('CHROME_BIN', 
-                          r"C:\Program Files\Google\Chrome\Application\chrome.exe")
-    CHROMEDRIVER_PATH = os.getenv('CHROME_DRIVER', 
-                                shutil.which('chromedriver') or r"C:\Program Files\chromedriver\chromedriver.exe")
+    CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    CHROMEDRIVER_PATH = shutil.which('chromedriver') or r"C:\chromedriver\chromedriver.exe"
 else:
-    CHROME_PATH = os.getenv('CHROME_BIN', '/usr/bin/chromium')
-    CHROMEDRIVER_PATH = os.getenv('CHROME_DRIVER', '/usr/lib/chromium/chromedriver')
-
-# Global storage
-monitored_urls = {}
-is_monitoring = False
-SECURITY_LOG = "activity.log"
+    CHROME_PATH = '/usr/bin/google-chrome'
+    CHROMEDRIVER_PATH = shutil.which('chromedriver') or '/usr/bin/chromedriver'
 
 def kill_previous_instances():
     """Kill any previous bot instances"""
@@ -176,83 +174,54 @@ def get_chrome_options():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,720")  # Smaller window to save memory
-    options.add_argument("--disable-features=VizDisplayCompositor")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--window-size=1280,720")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-plugins")
     options.add_argument("--disable-images")
-    # KEEP JAVASCRIPT ENABLED - Zealy needs it!
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    # MODERATE MEMORY OPTIMIZATIONS (less aggressive to prevent crashes)
+    # Memory optimizations
     options.add_argument("--memory-pressure-off")
     options.add_argument("--aggressive-cache-discard")
     options.add_argument("--disable-background-timer-throttling")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
     options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-ipc-flooding-protection")
-    
-    # SAFER FEATURE DISABLING (avoid crash-prone flags)
     options.add_argument("--disable-software-rasterizer")
     options.add_argument("--disable-accelerated-2d-canvas")
-    options.add_argument("--disable-accelerated-jpeg-decoding")
-    options.add_argument("--disable-accelerated-mjpeg-decode")
-    options.add_argument("--disable-accelerated-video-decode")
-    
-    # NETWORK AND UI OPTIMIZATIONS
     options.add_argument("--disable-default-apps")
     options.add_argument("--disable-sync")
     options.add_argument("--disable-translate")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-features=MediaRouter")
     options.add_argument("--disable-logging")
-    options.add_argument("--log-level=3")  # Only fatal errors
+    options.add_argument("--log-level=3")
     
-    # ENVIRONMENT-SPECIFIC OPTIMIZATIONS
     if IS_RENDER:
         options.add_argument("--disable-setuid-sandbox")
+        options.add_argument("--single-process")
+        options.add_argument("--no-zygote")
         options.add_argument("--no-first-run")
         options.add_argument("--disable-infobars")
-        options.add_argument("--single-process")  # Only use single-process on Render
-        options.add_argument("--no-zygote")
         options.add_argument("--disable-dev-tools")
-        # More conservative memory limits for Render
-        options.add_argument("--max_old_space_size=256")  # Increased from 128
+        options.add_argument("--max_old_space_size=256")
         options.add_argument("--js-flags=--max-old-space-size=256")
     else:
-        # Local development - even more conservative
-        options.add_argument("--max_old_space_size=512")  # Higher for local
+        options.add_argument("--max_old_space_size=512")
         options.add_argument("--js-flags=--max-old-space-size=512")
-        # Don't use single-process locally as it can cause crashes
     
-    print(f"🕵️ Using Chrome binary path: {CHROME_PATH}")
-    print(f"🕵️ Using Chromedriver path: {CHROMEDRIVER_PATH}")
-    
-    if IS_RENDER:
-        print(f"💾 Render optimizations: Single process, 256MB heap limit")
-    else:
-        print(f"💾 Local optimizations: Multi-process, 512MB heap limit")
-    
-    if not IS_RENDER:
-        if not os.path.exists(CHROME_PATH):
-            print(f"⚠️ WARNING: Chrome not found at expected path: {CHROME_PATH}")
-            if platform.system() == "Windows":
-                possible_paths = [
-                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-                ]
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        print(f"✅ Found Chrome at: {path}")
-                        options.binary_location = path
-                        break
-        else:
-            options.binary_location = CHROME_PATH
-    else:
+    # Set Chrome binary path
+    if os.path.exists(CHROME_PATH):
         options.binary_location = CHROME_PATH
-        
+    elif not IS_RENDER and platform.system() == "Windows":
+        # Try common Windows Chrome paths
+        possible_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                options.binary_location = path
+                break
+    
     return options
 
 @dataclass
@@ -267,428 +236,171 @@ class URLData:
     avg_response_time: float = 0.0
     
     def update_response_time(self, response_time: float):
-        """Update average response time with exponential moving average"""
+        """Update average response time"""
         if self.avg_response_time == 0:
             self.avg_response_time = response_time
         else:
             self.avg_response_time = 0.7 * self.avg_response_time + 0.3 * response_time
 
-class DriverPool:
-    """Adaptive driver management - switches between pooling and fresh drivers based on environment"""
-    
-    def __init__(self, pool_size: int = DRIVER_POOL_SIZE):
-        self.pool_size = pool_size
-        self.available_drivers = Queue()
-        self.active_drivers = set()
-        self.lock = threading.Lock()
-        
-        # Failure tracking for adaptive behavior
-        self.session_failures_count = 0
-        self.consecutive_failures = 0
-        self.use_fresh_drivers = False  # Start with pooling
-        self.last_failure_time = 0
-        
-        if not self.use_fresh_drivers:
-            self._initialize_pool()
-    
-    def _initialize_pool(self):
-        """Pre-initialize driver pool for faster access"""
-        if self.use_fresh_drivers:
-            print("🔧 Using fresh drivers mode - no pool initialization")
-            return
-            
-        for _ in range(self.pool_size):
-            try:
-                driver = self._create_driver()
-                if driver:
-                    self.available_drivers.put(driver)
-                    print(f"✅ Driver added to pool. Pool size: {self.available_drivers.qsize()}")
-            except Exception as e:
-                print(f"⚠️ Failed to initialize driver in pool: {e}")
-                self._handle_session_failure()
-    
-    def _create_driver(self):
-        """Create a new WebDriver instance"""
-        try:
-            options = get_chrome_options()
-            if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
-                driver = webdriver.Chrome(options=options)
-            else:
-                service = Service(executable_path=CHROMEDRIVER_PATH)
-                driver = webdriver.Chrome(service=service, options=options)
-            
-            # Pre-configure driver for better performance
-            driver.set_page_load_timeout(REQUEST_TIMEOUT)
-            driver.implicitly_wait(5)
-            return driver
-        except Exception as e:
-            print(f"❌ Failed to create driver: {e}")
-            return None
-    
-    def _handle_session_failure(self):
-        """Track session failures and switch to fresh drivers if needed"""
-        self.session_failures_count += 1
-        self.consecutive_failures += 1
-        self.last_failure_time = time.time()
-        
-        # Switch to fresh drivers if we have too many consecutive failures
-        if self.consecutive_failures >= 3 and not self.use_fresh_drivers:
-            print("🚨 TOO MANY SESSION FAILURES - SWITCHING TO FRESH DRIVERS MODE")
-            self.use_fresh_drivers = True
-            self.cleanup()  # Clear the pool
-        elif self.session_failures_count >= 10:
-            print("🚨 PERSISTENT SESSION ISSUES - ENFORCING FRESH DRIVERS MODE")
-            self.use_fresh_drivers = True
-            self.cleanup()
-
-    def get_driver(self, timeout: int = 10):
-        """Get a driver - adaptive between pooled and fresh"""
-        
-        # FRESH DRIVERS MODE - always create new
-        if self.use_fresh_drivers:
-            print("🆕 Creating fresh driver (pool disabled due to session failures)")
-            driver = self._create_driver()
-            if driver:
-                with self.lock:
-                    self.active_drivers.add(driver)
-            return driver
-        
-        # POOLED MODE - try to reuse
-        try:
-            driver = self.available_drivers.get(timeout=timeout)
-            
-            # Check if driver is still functional before using
-            if not self._is_driver_healthy(driver):
-                print("🔄 Driver unhealthy, creating new one...")
-                self._close_driver(driver)
-                self._handle_session_failure()
-                
-                # If we just switched to fresh mode, return fresh driver
-                if self.use_fresh_drivers:
-                    return self.get_driver(timeout)
-                    
-                driver = self._create_driver()
-            else:
-                # Driver is healthy, reset consecutive failures
-                self.consecutive_failures = 0
-            
-            if driver:
-                with self.lock:
-                    self.active_drivers.add(driver)
-            return driver
-            
-        except Empty:
-            # If no drivers available, create a new one
-            print("⚠️ No drivers available, creating new one...")
-            driver = self._create_driver()
-            if driver:
-                with self.lock:
-                    self.active_drivers.add(driver)
-            return driver
-    
-    def return_driver(self, driver):
-        """Return a driver - adaptive behavior"""
-        if not driver:
-            return
-            
-        try:
-            with self.lock:
-                self.active_drivers.discard(driver)
-            
-            # FRESH DRIVERS MODE - always close immediately
-            if self.use_fresh_drivers:
-                print("🗑️ Closing fresh driver (not returning to pool)")
-                self._close_driver(driver)
-                return
-            
-            # POOLED MODE - enhanced health check before returning to pool
-            if self._is_driver_healthy(driver):
-                # Additional check: try a simple operation
-                try:
-                    _ = driver.current_url
-                    self.available_drivers.put(driver)
-                    print("✅ Healthy driver returned to pool")
-                    # Reset consecutive failures on successful return
-                    self.consecutive_failures = 0
-                except Exception as e:
-                    print(f"🔄 Driver failed health check during return: {e}")
-                    self._close_driver(driver)
-                    self._handle_session_failure()
-                    # Replace with new driver if still in pooled mode
-                    if not self.use_fresh_drivers:
-                        new_driver = self._create_driver()
-                        if new_driver:
-                            self.available_drivers.put(new_driver)
-            else:
-                print("🔄 Replacing unhealthy driver")
-                self._close_driver(driver)
-                self._handle_session_failure()
-                # Replace with new driver if still in pooled mode
-                if not self.use_fresh_drivers:
-                    new_driver = self._create_driver()
-                    if new_driver:
-                        self.available_drivers.put(new_driver)
-                        
-        except Exception as e:
-            print(f"⚠️ Error returning driver: {e}")
-            self._close_driver(driver)
-            self._handle_session_failure()
-    
-    def _is_driver_healthy(self, driver) -> bool:
-        """Enhanced health check for driver"""
-        try:
-            # Multiple health checks
-            _ = driver.current_url
-            _ = driver.title
-            _ = driver.window_handles
-            return True
-        except Exception as e:
-            # Check if it's a session error
-            if "invalid session id" in str(e) or "session deleted" in str(e):
-                self._handle_session_failure()
-            return False
-    
-    def _close_driver(self, driver):
-        """Safely close a driver with enhanced error handling"""
-        try:
-            driver.quit()
-        except Exception as e:
-            print(f"⚠️ Error closing driver: {e}")
-            # Force close if regular quit fails
-            try:
-                driver.service.process.terminate()
-            except:
-                pass
-    
-    def cleanup(self):
-        """Clean up all drivers in the pool"""
-        print("🧹 Cleaning up driver pool...")
-        
-        # Close available drivers
-        while not self.available_drivers.empty():
-            try:
-                driver = self.available_drivers.get_nowait()
-                self._close_driver(driver)
-            except Empty:
-                break
-        
-        # Close active drivers
-        with self.lock:
-            for driver in self.active_drivers.copy():
-                self._close_driver(driver)
-            self.active_drivers.clear()
-
-# Global instances (will be initialized after function definitions)
+# Global variables
 monitored_urls: Dict[str, URLData] = {}
 is_monitoring = False
-driver_pool = None
 notification_queue = Queue()
-SECURITY_LOG = "activity.log"
+
+def create_driver():
+    """Create a single Chrome driver instance"""
+    try:
+        options = get_chrome_options()
+        
+        if IS_RENDER or not os.path.exists(CHROMEDRIVER_PATH):
+            driver = webdriver.Chrome(options=options)
+        else:
+            service = Service(executable_path=CHROMEDRIVER_PATH)
+            driver = webdriver.Chrome(service=service, options=options)
+        
+        driver.set_page_load_timeout(REQUEST_TIMEOUT)
+        driver.implicitly_wait(5)
+        print("✅ Driver created successfully")
+        return driver
+        
+    except Exception as e:
+        print(f"❌ Failed to create driver: {e}")
+        return None
 
 def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[str], float, Optional[str], Optional[str]]:
-    """
-    Fast content hash extraction with session error recovery
-    Returns: (hash, response_time, error_message, raw_content_sample)
-    """
+    """Get content hash for URL with cleaning"""
     driver = None
     start_time = time.time()
-    max_attempts = 2  # Reduced attempts for memory conservation
     
-    for attempt in range(max_attempts):
-        try:
-            print(f"🌐 Getting driver for URL: {url} (attempt {attempt + 1}/{max_attempts})")
-            driver = driver_pool.get_driver(timeout=5)
-            
-            if not driver:
-                if attempt < max_attempts - 1:
-                    print(f"⏳ Failed to get driver, retrying in 2s...")
-                    time.sleep(2)
-                    continue
-                return None, time.time() - start_time, "Failed to get driver from pool", None
-            
-            print(f"🌐 Loading URL: {url}")
-            driver.get(url)
-            
-            # Give Zealy time to load but not too much (memory conscious)
-            print("⏳ Waiting for React to render...")
-            time.sleep(2)  # Reduced wait time to save memory
-            
-            print("⏳ Waiting for page elements...")
-            # Keep the exact same selector logic as requested
-            selectors_to_try = [
-                ZEALY_CONTAINER_SELECTOR,
-                "div[class*='flex'][class*='flex-col']",
-                "main",
-                "body"
-            ]
-            
-            container = None
-            for selector in selectors_to_try:
-                try:
-                    container = WebDriverWait(driver, 8).until(  # Reduced wait time
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    print(f"✅ Found element with selector: {selector}")
-                    break
-                except TimeoutException:
-                    print(f"⚠️ Selector {selector} not found, trying next...")
-                    continue
-            
-            if not container:
-                if attempt < max_attempts - 1:
-                    print(f"⏳ No container found, retrying...")
-                    driver_pool.return_driver(driver)
-                    driver = None
-                    time.sleep(2)
-                    continue
-                return None, time.time() - start_time, "No suitable container found", None
-            
-            # Reduced wait time for faster processing
-            time.sleep(1)
-            content = container.text
-            
-            if not content or len(content.strip()) < 10:
-                if attempt < max_attempts - 1:
-                    print(f"⏳ Content too short ({len(content)} chars), retrying...")
-                    driver_pool.return_driver(driver)
-                    driver = None
-                    time.sleep(2)
-                    continue
-                return None, time.time() - start_time, f"Content too short: {len(content)} chars", None
-            
-            print(f"📄 Content retrieved, length: {len(content)} chars")
-            
-            # Enhanced content cleaning to remove dynamic elements
-            clean_content = content
-            
-            # Remove timestamps (various formats)
-            clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?', '', clean_content)
-            clean_content = re.sub(r'\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?', '', clean_content)
-            clean_content = re.sub(r'(?:\d+\s*(?:seconds?|mins?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago)', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'(?:just now|moments? ago|recently)', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove XP and point systems
-            clean_content = re.sub(r'\d+\s*(?:XP|points?|pts)', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'(?:XP|points?|pts)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove UUIDs and session identifiers
-            clean_content = re.sub(r'\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'\b[a-f0-9]{32}\b', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'\b[a-f0-9]{40}\b', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove view counts and engagement metrics
-            clean_content = re.sub(r'\d+\s*(?:views?|likes?|shares?|comments?|replies?)', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'(?:views?|likes?|shares?|comments?|replies?)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove online/active user counts
-            clean_content = re.sub(r'\d+\s*(?:online|active|members?|users?)', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'(?:online|active|members?|users?)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove progress indicators and percentages
-            clean_content = re.sub(r'\d+%|\d+/\d+', '', clean_content)
-            clean_content = re.sub(r'(?:progress|completed|remaining)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove dynamic counters and statistics
-            clean_content = re.sub(r'\d+\s*(?:total|count|number)', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'(?:total|count|number)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove rank and position indicators (but keep quest ranks)
-            clean_content = re.sub(r'(?:rank|position)\s*#?\d+', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'#\d+\s*(?:rank|position)', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove session-specific data
-            clean_content = re.sub(r'session\s*[a-f0-9]+', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'token\s*[a-f0-9]+', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove loading states and dynamic text
-            clean_content = re.sub(r'(?:loading|refreshing|updating)\.{0,3}', '', clean_content, flags=re.IGNORECASE)
-            
-            # Remove whitespace variations and normalize
-            clean_content = re.sub(r'\s+', ' ', clean_content)
-            clean_content = clean_content.strip()
-            
-            # Additional filtering for Zealy-specific dynamic content
-            clean_content = re.sub(r'(?:quest|task)\s+\d+\s*(?:of|/)\s*\d+', '', clean_content, flags=re.IGNORECASE)
-            clean_content = re.sub(r'(?:day|week|month)\s+\d+', '', clean_content, flags=re.IGNORECASE)
-            
-            print(f"📄 Content cleaned, original: {len(content)} chars, cleaned: {len(clean_content)} chars")
-            content_hash = hashlib.sha256(clean_content.encode()).hexdigest()
-            response_time = time.time() - start_time
-            
-            # Return sample for debugging if requested
-            content_sample = content[:500] if debug_mode else None
-            
-            print(f"🔢 Hash generated: {content_hash[:8]}... in {response_time:.2f}s")
-            return content_hash, response_time, None, content_sample
-            
-        except (WebDriverException, Exception) as e:
-            error_str = str(e)
-            
-            # Check for session-related errors
-            if any(session_error in error_str for session_error in [
-                "invalid session id", 
-                "session deleted", 
-                "browser has closed",
-                "not connected to DevTools",
-                "chrome not reachable"
-            ]):
-                print(f"🚨 Session error detected (attempt {attempt + 1}/{max_attempts}): {error_str[:100]}...")
-                
-                # Force driver pool to handle the session failure
-                if driver_pool:
-                    driver_pool._handle_session_failure()
-                
-                # Clean up the broken driver
-                if driver:
-                    try:
-                        driver_pool._close_driver(driver)
-                    except:
-                        pass
-                    driver = None
-                
-                # Retry if we have attempts left
-                if attempt < max_attempts - 1:
-                    retry_delay = 3  # Fixed delay for memory conservation
-                    print(f"⏳ Retrying after session error in {retry_delay}s...")
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    return None, time.time() - start_time, f"Max retries exceeded due to session errors: {error_str}", None
-            else:
-                # Non-session error
-                error_msg = f"WebDriver error: {error_str}"
-                print(f"⚠️ {error_msg}")
-                
-                if attempt < max_attempts - 1:
-                    print(f"⏳ Retrying after error in 2s...")
-                    if driver:
-                        driver_pool.return_driver(driver)
-                        driver = None
-                    time.sleep(2)
-                    continue
-                else:
-                    return None, time.time() - start_time, error_msg, None
-        finally:
-            if driver:
-                driver_pool.return_driver(driver)
-    
-    # If we get here, all attempts failed
-    return None, time.time() - start_time, "All retry attempts failed", None
+    try:
+        print(f"🌐 Loading URL: {url}")
+        driver = create_driver()
+        
+        if not driver:
+            return None, time.time() - start_time, "Failed to create driver", None
+        
+        driver.get(url)
+        print("⏳ Waiting for React to render...")
+        time.sleep(3)  # Wait for React to load
+        
+        print("⏳ Waiting for page elements...")
+        # Try different selectors
+        selectors = [
+            ZEALY_CONTAINER_SELECTOR,
+            "div[class*='flex'][class*='flex-col']",
+            "main",
+            "body"
+        ]
+        
+        container = None
+        for selector in selectors:
+            try:
+                container = WebDriverWait(driver, 8).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                print(f"✅ Found element with selector: {selector}")
+                break
+            except TimeoutException:
+                print(f"⚠️ Selector {selector} not found, trying next...")
+                continue
+        
+        if not container:
+            return None, time.time() - start_time, "No suitable container found", None
+        
+        time.sleep(1)  # Additional wait
+        content = container.text
+        
+        if not content or len(content.strip()) < 10:
+            return None, time.time() - start_time, f"Content too short: {len(content)} chars", None
+        
+        print(f"📄 Content retrieved, length: {len(content)} chars")
+        
+        # Enhanced content cleaning
+        clean_content = content
+        
+        # Remove timestamps and dates
+        clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?', '', clean_content)
+        clean_content = re.sub(r'\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?', '', clean_content)
+        clean_content = re.sub(r'(?:\d+\s*(?:seconds?|mins?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago)', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'(?:just now|moments? ago|recently)', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove XP and point systems
+        clean_content = re.sub(r'\d+\s*(?:XP|points?|pts)', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'(?:XP|points?|pts)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove UUIDs and session identifiers
+        clean_content = re.sub(r'\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'\b[a-f0-9]{32}\b', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'\b[a-f0-9]{40}\b', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove view counts and engagement metrics
+        clean_content = re.sub(r'\d+\s*(?:views?|likes?|shares?|comments?|replies?)', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'(?:views?|likes?|shares?|comments?|replies?)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove online/active user counts
+        clean_content = re.sub(r'\d+\s*(?:online|active|members?|users?)', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'(?:online|active|members?|users?)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove progress indicators and percentages
+        clean_content = re.sub(r'\d+%|\d+/\d+', '', clean_content)
+        clean_content = re.sub(r'(?:progress|completed|remaining)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove dynamic counters
+        clean_content = re.sub(r'\d+\s*(?:total|count|number)', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'(?:total|count|number)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove rank and position indicators
+        clean_content = re.sub(r'(?:rank|position)\s*#?\d+', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'#\d+\s*(?:rank|position)', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove session-specific data
+        clean_content = re.sub(r'session\s*[a-f0-9]+', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'token\s*[a-f0-9]+', '', clean_content, flags=re.IGNORECASE)
+        
+        # Remove loading states
+        clean_content = re.sub(r'(?:loading|refreshing|updating)\.{0,3}', '', clean_content, flags=re.IGNORECASE)
+        
+        # Normalize whitespace
+        clean_content = re.sub(r'\s+', ' ', clean_content)
+        clean_content = clean_content.strip()
+        
+        # Additional Zealy-specific filtering
+        clean_content = re.sub(r'(?:quest|task)\s+\d+\s*(?:of|/)\s*\d+', '', clean_content, flags=re.IGNORECASE)
+        clean_content = re.sub(r'(?:day|week|month)\s+\d+', '', clean_content, flags=re.IGNORECASE)
+        
+        print(f"📄 Content cleaned, original: {len(content)} chars, cleaned: {len(clean_content)} chars")
+        
+        content_hash = hashlib.sha256(clean_content.encode()).hexdigest()
+        response_time = time.time() - start_time
+        
+        # Return sample for debugging if requested
+        content_sample = content[:500] if debug_mode else None
+        
+        print(f"🔢 Hash generated: {content_hash[:8]}... in {response_time:.2f}s")
+        return content_hash, response_time, None, content_sample
+        
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        print(f"❌ {error_msg}")
+        return None, time.time() - start_time, error_msg, None
+        
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception as e:
+                print(f"⚠️ Error closing driver: {e}")
 
 async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Optional[str]]:
-    """
-    Check a single URL with smart retry logic
-    Returns: (url, has_changes, error_message)
-    """
+    """Check a single URL for changes"""
     retry_count = 0
     last_error = None
     
     while retry_count < MAX_RETRIES:
         try:
-            # Use thread pool for CPU-bound hash operation
             loop = asyncio.get_event_loop()
             hash_result, response_time, error, content_sample = await loop.run_in_executor(
-                None, get_content_hash_fast, url, False  # Debug mode off by default
+                None, get_content_hash_fast, url, False
             )
             
             if hash_result is None:
@@ -696,13 +408,11 @@ async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Opti
                 last_error = error or "Unknown error"
                 
                 if retry_count < MAX_RETRIES:
-                    # Exponential backoff with jitter
-                    delay = RETRY_DELAY_BASE ** retry_count + (retry_count * 0.5)
+                    delay = RETRY_DELAY_BASE ** retry_count
                     print(f"⏳ Retrying {url} in {delay:.1f}s (attempt {retry_count + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(delay)
                     continue
                 else:
-                    # Max retries reached
                     url_data.failures += 1
                     url_data.consecutive_successes = 0
                     url_data.last_error = last_error
@@ -743,18 +453,10 @@ async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Opti
     return url, False, last_error
 
 async def send_notification(bot, message: str, priority: bool = False):
-    """Enhanced notification system with queue and priority"""
-    if priority:
-        # For urgent notifications, send immediately
-        return await _send_telegram_message(bot, message)
-    else:
-        # Add to queue for batch processing
-        notification_queue.put(message)
-        return True
-
-async def _send_telegram_message(bot, message: str) -> bool:
-    """Send message with improved retry logic"""
+    """Send Telegram notification"""
     retries = 0
+    backoff_delay = 1
+    
     while retries < 3:
         try:
             await bot.send_message(chat_id=CHAT_ID, text=message)
@@ -763,37 +465,15 @@ async def _send_telegram_message(bot, message: str) -> bool:
         except (TelegramError, NetworkError) as e:
             print(f"📡 Network error: {str(e)} - Retry {retries+1}/3")
             retries += 1
-            await asyncio.sleep(5)
+            if retries < 3:
+                await asyncio.sleep(backoff_delay)
+                backoff_delay *= 2
+    
+    print(f"❌ Failed to send notification after 3 retries")
     return False
 
-async def process_notification_queue(bot):
-    """Process queued notifications in batches"""
-    while is_monitoring:
-        try:
-            messages = []
-            start_time = time.time()
-            
-            # Collect messages for up to 2 seconds or until we have 5 messages
-            while len(messages) < 5 and (time.time() - start_time) < 2:
-                try:
-                    message = notification_queue.get(timeout=0.5)
-                    messages.append(message)
-                except Empty:
-                    break
-            
-            # Send batched messages
-            if messages:
-                batch_message = "\n".join(messages)
-                await _send_telegram_message(bot, batch_message[:4000])
-            
-            await asyncio.sleep(1)
-            
-        except Exception as e:
-            print(f"⚠️ Error in notification queue processor: {e}")
-            await asyncio.sleep(5)
-
-async def check_urls_parallel(bot):
-    """Sequential URL checking for memory conservation (no parallel processing)"""
+async def check_urls_sequential(bot):
+    """Check URLs sequentially (one by one)"""
     global monitored_urls
     current_time = time.time()
     
@@ -803,7 +483,6 @@ async def check_urls_parallel(bot):
     
     print(f"🔍 Checking {len(monitored_urls)} URLs sequentially...")
     
-    # Process URLs one by one to save memory (no concurrent processing)
     changes_detected = 0
     urls_to_remove = []
     
@@ -825,7 +504,7 @@ async def check_urls_parallel(bot):
             if has_changes:
                 changes_detected += 1
                 # Check rate limiting for notifications
-                if current_time - url_data.last_notified > 60:  # Reduced to 1 minute
+                if current_time - url_data.last_notified > 60:
                     await send_notification(
                         bot, 
                         f"🚨 CHANGE DETECTED!\n{url}\nAvg response: {url_data.avg_response_time:.2f}s\nCheck #{url_data.check_count}",
@@ -833,27 +512,36 @@ async def check_urls_parallel(bot):
                     )
                     url_data.last_notified = current_time
             
-            # Handle failures with smarter logic
+            # Handle failures
             if url_data.failures > FAILURE_THRESHOLD:
                 urls_to_remove.append(url)
-            elif url_data.failures > 2 and url_data.consecutive_successes == 0:  # Reduced threshold
-                # Temporary failure notification
+            elif url_data.failures > 2 and url_data.consecutive_successes == 0:
                 await send_notification(
                     bot,
                     f"⚠️ Monitoring issues for {url}\nFailures: {url_data.failures}/{FAILURE_THRESHOLD}\nLast error: {url_data.last_error or 'Unknown'}"
                 )
+                
         except Exception as e:
-            print(f"⚠️ Error processing {url}: {str(e)}")
-            
-    print(f"✅ Checked {len(monitored_urls)} URLs")
+            print(f"⚠️ Error processing URL {url}: {e}")
+    
+    # Remove problematic URLs
+    for url in urls_to_remove:
+        del monitored_urls[url]
+        await send_notification(
+            bot, 
+            f"🔴 Removed from monitoring (too many failures): {url}",
+            priority=True
+        )
+        print(f"🗑️ Removed {url} after {FAILURE_THRESHOLD} failures")
+    
+    print(f"✅ Sequential check complete: {changes_detected} changes, {len(urls_to_remove)} removed")
 
-# Command handlers
+# AUTH MIDDLEWARE
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
-    print(f"🚨 EMERGENCY LOG: Message received from chat ID: {user_id}")
-    print(f"🚨 EMERGENCY LOG: Message text: {update.message.text if update.message else 'No text'}")
-    print(f"🚨 EMERGENCY LOG: Expected chat ID: {CHAT_ID}")
-    print(f"🚨 EMERGENCY LOG: Match: {user_id == CHAT_ID}")
+    print(f"📨 Message from chat ID: {user_id}")
+    print(f"📨 Expected chat ID: {CHAT_ID}")
+    print(f"📨 Match: {user_id == CHAT_ID}")
     
     if user_id != CHAT_ID:
         print(f"🚫 Unauthorized access from chat ID: {user_id}")
@@ -862,8 +550,9 @@ async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         print(f"✅ Authorized access from chat ID: {user_id}")
 
+# COMMAND HANDLERS
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("🚨 EMERGENCY LOG: /start command received!")
+    print("📨 /start command received!")
     await update.message.reply_text(
         "🚀 Zealy Monitoring Bot\n\n"
         "Commands:\n"
@@ -872,22 +561,124 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list - Show monitored URLs\n"
         "/run - Start monitoring\n"
         "/stop - Stop monitoring\n"
-        "/purge - Remove all URLs\n"
         "/status - Show monitoring statistics\n"
         "/debug <number> - Debug URL content\n"
-        "/sensitivity - View filter settings\n"
-        f"Max URLs: {MAX_URLS} (optimized for 512MB RAM)\n"
+        "/purge - Remove all URLs\n"
+        f"\nMax URLs: {MAX_URLS}\n"
         f"Check interval: {CHECK_INTERVAL}s\n"
-        f"Concurrent checks: {MAX_CONCURRENT_CHECKS} (sequential for memory)\n\n"
-        "💾 Optimized for low memory environments!"
+        "Memory optimized for low-resource environments!"
     )
+
+async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📨 /add command received!")
+    
+    if len(monitored_urls) >= MAX_URLS:
+        await update.message.reply_text(f"❌ Maximum URLs limit ({MAX_URLS}) reached")
+        return
+    
+    if not context.args or not context.args[0]:
+        await update.message.reply_text("❌ Usage: /add <zealy-url>")
+        return
+    
+    url = context.args[0].lower()
+    print(f"📥 Attempting to add URL: {url}")
+    
+    if not re.match(r'^https://(www\.)?zealy\.io/cw/[\w/-]+', url):
+        await update.message.reply_text("❌ Invalid Zealy URL format")
+        return
+    
+    if url in monitored_urls:
+        await update.message.reply_text("ℹ️ URL already monitored")
+        return
+    
+    processing_msg = await update.message.reply_text("⏳ Verifying URL...")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        print(f"🔄 Getting initial hash for {url}")
+        initial_hash, response_time, error, content_sample = await loop.run_in_executor(
+            None, get_content_hash_fast, url, False
+        )
+        
+        if not initial_hash:
+            await processing_msg.edit_text(f"❌ Failed to verify URL: {error}")
+            return
+        
+        monitored_urls[url] = URLData(
+            hash=initial_hash,
+            last_notified=0,
+            last_checked=time.time(),
+            failures=0,
+            consecutive_successes=1,
+            check_count=1,
+            avg_response_time=response_time
+        )
+        
+        print(f"✅ URL added successfully: {url}")
+        await processing_msg.edit_text(
+            f"✅ Added: {url}\n"
+            f"📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}\n"
+            f"⚡ Initial response: {response_time:.2f}s"
+        )
+        
+    except Exception as e:
+        print(f"❌ Error while getting initial hash: {str(e)}")
+        try:
+            await processing_msg.edit_text(f"❌ Failed to add URL: {str(e)}")
+        except:
+            print(f"❌ Could not edit message: {str(e)}")
+
+async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not monitored_urls:
+        await update.message.reply_text("📋 No URLs monitored")
+        return
+    
+    message_lines = ["📋 Monitored URLs:\n"]
+    for idx, (url, data) in enumerate(monitored_urls.items(), 1):
+        status = "✅" if data.failures == 0 else f"⚠️({data.failures})"
+        message_lines.append(f"{idx}. {status} {url}")
+    
+    message_lines.append(f"\n📊 Using {len(monitored_urls)}/{MAX_URLS} slots")
+    message = "\n".join(message_lines)[:4000]
+    await update.message.reply_text(message)
+
+async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not monitored_urls:
+        await update.message.reply_text("❌ No URLs to remove")
+        return
+    
+    if not context.args or not context.args[0]:
+        await update.message.reply_text("❌ Usage: /remove <number>\nUse /list to see URL numbers")
+        return
+    
+    try:
+        url_index = int(context.args[0]) - 1
+        url_list = list(monitored_urls.keys())
+        
+        if url_index < 0 or url_index >= len(url_list):
+            await update.message.reply_text(f"❌ Invalid number. Use a number between 1 and {len(url_list)}")
+            return
+        
+        url_to_remove = url_list[url_index]
+        del monitored_urls[url_to_remove]
+        
+        await update.message.reply_text(
+            f"✅ Removed: {url_to_remove}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
+        )
+        print(f"🗑️ Manually removed URL: {url_to_remove}")
+        
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid number")
+    except Exception as e:
+        print(f"⚠️ Error in remove_url: {str(e)}")
+        await update.message.reply_text(f"❌ Error removing URL: {str(e)}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not monitored_urls:
         await update.message.reply_text("📊 No URLs being monitored")
         return
     
-    status_lines = ["📊 Memory-Optimized Monitoring Statistics:\n"]
+    status_lines = ["📊 Monitoring Statistics:\n"]
     
     for url, data in monitored_urls.items():
         status_lines.append(
@@ -902,31 +693,14 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         status_lines.append("")
     
-    # Add adaptive driver status
-    if driver_pool:
-        if driver_pool.use_fresh_drivers:
-            status_lines.append("🔧 Driver mode: FRESH (adaptive - session issues detected)")
-            status_lines.append(f"⚠️ Session failures: {driver_pool.session_failures_count}")
-        else:
-            status_lines.append(f"🔧 Driver pool: {driver_pool.available_drivers.qsize()}/{driver_pool.pool_size} available")
-            status_lines.append(f"📊 Session failures: {driver_pool.session_failures_count}")
-            
-    status_lines.append(f"💾 Memory limit: {256 if IS_RENDER else 512}MB heap")
     status_lines.append(f"🔄 Monitoring: {'✅ Active' if is_monitoring else '❌ Stopped'}")
+    status_lines.append(f"💾 Memory optimized for low-resource environments")
     
     message = "\n".join(status_lines)[:4000]
     await update.message.reply_text(message)
 
 async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to see what content is being monitored for a URL"""
-    # Check if update and message exist
-    if not update or not update.message:
-        print("❌ Invalid update or missing message in debug_url")
-        return
-        
-    if update.effective_chat.id != CHAT_ID:
-        return
-    
     if not context.args or not context.args[0]:
         await update.message.reply_text("❌ Usage: /debug <number>\nUse /list to see URL numbers")
         return
@@ -958,7 +732,6 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚡ Response time: {response_time:.2f}s",
                 f"📊 Check count: {current_data.check_count}",
                 f"❌ Failures: {current_data.failures}",
-                f"💾 Memory mode: {'Fresh drivers' if driver_pool.use_fresh_drivers else 'Pooled drivers'}",
                 "",
                 "📝 Content sample (first 400 chars):",
                 f"```{content_sample[:400] if content_sample else 'No sample available'}```"
@@ -972,192 +745,7 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❌ Please provide a valid number")
     except Exception as e:
-        try:
-            await update.message.reply_text(f"❌ Debug error: {str(e)}")
-        except:
-            print(f"❌ Could not send debug error message: {str(e)}")
-
-async def sensitivity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Adjust monitoring sensitivity"""
-    if update.effective_chat.id != CHAT_ID:
-        return
-    
-    help_text = [
-        "🎛️ Memory-Optimized Sensitivity Settings:",
-        "",
-        "Current filters remove:",
-        "✅ Timestamps and dates",
-        "✅ XP and point counters", 
-        "✅ View counts and engagement",
-        "✅ Online user counts",
-        "✅ Progress indicators",
-        "✅ Rank positions",
-        "✅ Session IDs and tokens",
-        "✅ Loading states",
-        "",
-        "Memory optimizations:",
-        f"💾 Max URLs: {MAX_URLS} (reduced for 512MB RAM)",
-        f"💾 Sequential processing (no parallel checks)",
-        f"💾 Heap limit: {256 if IS_RENDER else 512}MB",
-        f"💾 Reduced timeouts and retries",
-        "",
-        "If you're still getting false positives:",
-        "1. Use /debug <number> to see what content is changing",
-        "2. Consider reducing monitored URLs further",
-        "3. The bot auto-switches to fresh drivers when needed"
-    ]
-    
-    await update.message.reply_text("\n".join(help_text))
-
-async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not monitored_urls:
-        await update.message.reply_text("📋 No URLs monitored")
-        return
-    
-    message_lines = ["📋 Monitored URLs:\n"]
-    for idx, (url, data) in enumerate(monitored_urls.items(), 1):
-        status = "✅" if data.failures == 0 else f"⚠️({data.failures})"
-        message_lines.append(f"{idx}. {status} {url}")
-    
-    message_lines.append(f"\n💾 Using {len(monitored_urls)}/{MAX_URLS} slots (512MB optimized)")
-    message = "\n".join(message_lines)[:4000]
-    await update.message.reply_text(message)
-
-async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Check if update and message exist
-    if not update or not update.message:
-        print("❌ Invalid update or missing message in remove_url")
-        return
-        
-    if update.effective_chat.id != CHAT_ID:
-        return
-    
-    if not monitored_urls:
-        await update.message.reply_text("❌ No URLs to remove")
-        return
-        
-    try:
-        if not context.args or not context.args[0]:
-            await update.message.reply_text("❌ Usage: /remove <number>\nUse /list to see URL numbers")
-            return
-            
-        try:
-            url_index = int(context.args[0]) - 1
-        except ValueError:
-            await update.message.reply_text("❌ Please provide a valid number")
-            return
-            
-        url_list = list(monitored_urls.keys())
-        
-        if url_index < 0 or url_index >= len(url_list):
-            await update.message.reply_text(f"❌ Invalid number. Use a number between 1 and {len(url_list)}")
-            return
-        
-        url_to_remove = url_list[url_index]
-        del monitored_urls[url_to_remove]
-        
-        await update.message.reply_text(
-            f"✅ Removed: {url_to_remove}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
-        )
-        print(f"🗑️ Manually removed URL: {url_to_remove}")
-        
-    except ValueError:
-        await update.message.reply_text("❌ Please provide a valid number")
-    except Exception as e:
-        print(f"⚠️ Error in remove_url: {str(e)}")
-        try:
-            await update.message.reply_text(f"❌ Error removing URL: {str(e)}")
-        except:
-            print(f"❌ Could not send error message: {str(e)}")
-
-async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("🚨 EMERGENCY LOG: /add command received!")
-    # Check if update and message exist
-    if not update or not update.message:
-        print("❌ Invalid update or missing message in add_url")
-        return
-    
-    print(f"🔍 ADD_URL: Received request from chat ID: {update.effective_chat.id}")
-    print(f"🔍 ADD_URL: Expected chat ID: {CHAT_ID}")
-    print(f"🔍 ADD_URL: Auth check: {update.effective_chat.id == CHAT_ID}")
-    print(f"🔍 ADD_URL: Context args: {context.args}")
-    
-    if update.effective_chat.id != CHAT_ID:
-        print(f"🚫 ADD_URL: Unauthorized access from {update.effective_chat.id}")
-        return
-    
-    if len(monitored_urls) >= MAX_URLS:
-        await update.message.reply_text(f"❌ Maximum URLs limit ({MAX_URLS}) reached\n💾 This limit is optimized for 512MB RAM")
-        return
-        
-    try:
-        if not context.args or not context.args[0]:
-            await update.message.reply_text("❌ Usage: /add <zealy-url>")
-            return
-            
-        url = context.args[0].lower()
-        print(f"📥 Attempting to add URL: {url}")
-        
-        if not re.match(r'^https://(www\.)?zealy\.io/cw/[\w/-]+', url):
-            await update.message.reply_text("❌ Invalid Zealy URL format")
-            return
-            
-        if url in monitored_urls:
-            await update.message.reply_text("ℹ️ URL already monitored")
-            return
-            
-        processing_msg = await update.message.reply_text("⏳ Verifying URL (memory-optimized mode)...")
-        
-        try:
-            # Use the fast hash function
-            loop = asyncio.get_event_loop()
-            print(f"🔄 Getting initial hash for {url}")
-            initial_hash, response_time, error, content_sample = await loop.run_in_executor(
-                None, get_content_hash_fast, url, False
-            )
-            
-            if not initial_hash:
-                await processing_msg.edit_text(f"❌ Failed to verify URL: {error}")
-                return
-                
-            # Add to monitored URLs with enhanced data structure
-            monitored_urls[url] = URLData(
-                hash=initial_hash,
-                last_notified=0,
-                last_checked=time.time(),
-                failures=0,
-                consecutive_successes=1,
-                check_count=1,
-                avg_response_time=response_time
-            )
-            
-            print(f"✅ URL added successfully: {url}")
-            await processing_msg.edit_text(
-                f"✅ Added: {url}\n"
-                f"📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}\n"
-                f"⚡ Initial response: {response_time:.2f}s\n"
-                f"💾 Memory optimized for 512MB RAM"
-            )
-            
-        except Exception as e:
-            print(f"❌ Error while getting initial hash: {str(e)}")
-            if processing_msg:
-                try:
-                    await processing_msg.edit_text(f"❌ Failed to add URL: {str(e)}")
-                except:
-                    print(f"❌ Could not edit message: {str(e)}")
-            
-    except IndexError:
-        try:
-            await update.message.reply_text("❌ Usage: /add <zealy-url>")
-        except:
-            print("❌ Could not send usage message")
-    except Exception as e:
-        print(f"⚠️ Error in add_url: {str(e)}")
-        try:
-            await update.message.reply_text(f"❌ Internal server error: {str(e)}")
-        except:
-            print(f"❌ Could not send error message: {str(e)}")
+        await update.message.reply_text(f"❌ Debug error: {str(e)}")
 
 async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
@@ -1171,21 +759,17 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # Set flag first
         is_monitoring = True
-        monitor_task = asyncio.create_task(start_monitoring(context.application))
-        notification_task = asyncio.create_task(process_notification_queue(context.application.bot))
-        
+        monitor_task = asyncio.create_task(start_monitoring(context.application.bot))
         context.chat_data['monitor_task'] = monitor_task
-        context.chat_data['notification_task'] = notification_task
         
         await update.message.reply_text(
-            f"✅ Memory-optimized monitoring started!\n"
+            f"✅ Monitoring started!\n"
             f"🔍 Checking {len(monitored_urls)} URLs every {CHECK_INTERVAL}s\n"
-            f"💾 Sequential processing for 512MB RAM\n"
-            f"⚡ Heap limit: {256 if IS_RENDER else 512}MB"
+            f"💾 Sequential processing (memory optimized)"
         )
-        print("✅ Memory-optimized monitoring tasks created and started")
+        print("✅ Monitoring tasks created and started")
+        
     except Exception as e:
         is_monitoring = False
         await update.message.reply_text(f"❌ Failed to start monitoring: {str(e)}")
@@ -1195,48 +779,49 @@ async def stop_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
     is_monitoring = False
     
-    # Cancel tasks
-    for task_name in ['monitor_task', 'notification_task']:
-        if task_name in context.chat_data:
-            try:
-                context.chat_data[task_name].cancel()
-                del context.chat_data[task_name]
-                print(f"🛑 {task_name} cancelled")
-            except Exception as e:
-                print(f"⚠️ Error cancelling {task_name}: {str(e)}")
+    # Cancel monitoring task
+    if 'monitor_task' in context.chat_data:
+        try:
+            context.chat_data['monitor_task'].cancel()
+            del context.chat_data['monitor_task']
+            print("🛑 Monitor task cancelled")
+        except Exception as e:
+            print(f"⚠️ Error cancelling monitor task: {str(e)}")
     
     await update.message.reply_text("🛑 Monitoring stopped")
 
 async def purge_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitored_urls
+    count = len(monitored_urls)
     monitored_urls.clear()
-    await update.message.reply_text(f"✅ All {count} URLs purged!\n💾 Memory fully freed!")
+    await update.message.reply_text(f"✅ All {count} URLs purged!")
 
 async def start_monitoring(bot):
     """Main monitoring loop"""
     global is_monitoring
-    bot = application.bot
-    await send_notification(bot, "🔔 Memory-optimized monitoring started! (512MB RAM)", priority=True)
-    print("🔍 Entering memory-optimized monitoring loop")
+    await send_notification(bot, "🔔 Monitoring started!")
+    print("🔍 Entering monitoring loop")
     
     while is_monitoring:
         try:
-            print(f"🔄 Running URL check cycle - {len(monitored_urls)} URLs")
+            print(f"🔄 Running sequential URL check cycle - {len(monitored_urls)} URLs")
             start_time = time.time()
             
-            await check_urls_parallel(bot)  # Sequential processing despite the name
+            await check_urls_sequential(bot)
             
             elapsed = time.time() - start_time
-            wait_time = max(CHECK_INTERVAL - elapsed, 5)
-            print(f"✓ Check complete in {elapsed:.2f}s, waiting {wait_time:.2f}s before next check")
+            wait_time = max(CHECK_INTERVAL - elapsed, 2)
+            print(f"✓ Sequential check complete in {elapsed:.2f}s, waiting {wait_time:.2f}s")
+            
             await asyncio.sleep(wait_time)
+            
         except asyncio.CancelledError:
             print("🚫 Monitoring task was cancelled")
             break
         except Exception as e:
             print(f"🚨 Monitoring error: {str(e)}")
             print(traceback.format_exc())
-            await asyncio.sleep(10)  # Shorter error recovery time
+            await asyncio.sleep(10)
     
     print("👋 Exiting monitoring loop")
     await send_notification(bot, "🔴 Monitoring stopped!")
@@ -1246,81 +831,58 @@ def main():
     try:
         global CHROME_PATH, CHROMEDRIVER_PATH
         
-        print(f"🚀 Starting memory-optimized bot (512MB RAM) at {datetime.now()}")
-        print(f"🚨 EMERGENCY CHECK: Script is running!")
-        print(f"🚨 EMERGENCY CHECK: Current working directory: {os.getcwd()}")
-        print(f"🚨 EMERGENCY CHECK: Python version: {sys.version}")
-        
-        kill_previous_instances()
-
+        print(f"🚀 Starting bot at {datetime.now()}")
         print(f"🌍 Operating System: {platform.system()}")
         print(f"🌍 Running on Render: {IS_RENDER}")
         print(f"💾 Chrome path: {CHROME_PATH}")
         print(f"💾 Chromedriver path: {CHROMEDRIVER_PATH}")
-        print(f"⚡ Max concurrent checks: {MAX_CONCURRENT_CHECKS} (sequential)")
-        print(f"🔧 Driver pool size: {DRIVER_POOL_SIZE}")
-        print(f"💾 Memory optimization: {256 if IS_RENDER else 512}MB heap limit")
-        print("🔴 JavaScript: ENABLED (required for Zealy)")
+        print(f"💾 Memory optimization enabled")
         
-        # Only check files locally, not on Render
+        # Kill previous instances
+        kill_previous_instances()
+        
         if not IS_RENDER:
             print(f"📂 Chrome exists: {os.path.exists(CHROME_PATH)}")
             print(f"📂 Chromedriver exists: {os.path.exists(CHROMEDRIVER_PATH)}")
             
-            chrome_path_to_use = CHROME_PATH
-            chromedriver_path_to_use = CHROMEDRIVER_PATH
-            
-            if not os.path.exists(chrome_path_to_use):
-                if platform.system() == "Windows":
-                    chrome_possible_paths = [
-                        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-                    ]
-                    for path in chrome_possible_paths:
-                        if os.path.exists(path):
-                            print(f"✅ Found Chrome at: {path}")
-                            chrome_path_to_use = path
-                            break
+            # Try to find Chrome if not at expected path
+            if not os.path.exists(CHROME_PATH) and platform.system() == "Windows":
+                chrome_possible_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+                ]
+                for path in chrome_possible_paths:
+                    if os.path.exists(path):
+                        print(f"✅ Found Chrome at: {path}")
+                        CHROME_PATH = path
+                        break
             
             # Try to find ChromeDriver if not at expected path
             if not os.path.exists(CHROMEDRIVER_PATH):
                 chromedriver_in_path = shutil.which('chromedriver')
                 if chromedriver_in_path:
                     print(f"✅ Found Chromedriver in PATH: {chromedriver_in_path}")
-                    chromedriver_path_to_use = chromedriver_in_path
-                    
-            if chrome_path_to_use != CHROME_PATH or chromedriver_path_to_use != CHROMEDRIVER_PATH:
-                CHROME_PATH = chrome_path_to_use
-                CHROMEDRIVER_PATH = chromedriver_path_to_use
-                print(f"📌 Using Chrome at: {CHROME_PATH}")
-                print(f"📌 Using Chromedriver at: {CHROMEDRIVER_PATH}")
+                    CHROMEDRIVER_PATH = chromedriver_in_path
         
-        # Initialize driver pool after paths are set
-        print("🔧 Initializing memory-optimized driver pool...")
-        driver_pool = DriverPool()
-        
+        # Set event loop policy for Windows
         if sys.platform == "win32":
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-        print("Creating Telegram application...")
+        print("🔧 Creating Telegram application...")
         print(f"🤖 Bot token (first 10 chars): {TELEGRAM_BOT_TOKEN[:10]}...")
         print(f"💬 Target chat ID: {CHAT_ID}")
         
-        # Test if we can create the application
-        try:
-            application = (
-                Application.builder()
-                .token(TELEGRAM_BOT_TOKEN)
-                .concurrent_updates(True)
-                .post_init(lambda app: app.bot.delete_webhook(drop_pending_updates=True))
-                .build()
-            )
-            print("✅ Telegram application created successfully")
-        except Exception as e:
-            print(f"❌ Failed to create Telegram application: {e}")
-            raise
-
-        print("Adding handlers...")
+        # Create Telegram application
+        application = (
+            Application.builder()
+            .token(TELEGRAM_BOT_TOKEN)
+            .concurrent_updates(True)
+            .build()
+        )
+        
+        print("✅ Telegram application created successfully")
+        
+        # Add auth middleware first
         application.add_handler(MessageHandler(filters.ALL, auth_middleware), group=-1)
         
         # Add command handlers
@@ -1333,8 +895,7 @@ def main():
             CommandHandler("stop", stop_monitoring),
             CommandHandler("purge", purge_urls),
             CommandHandler("status", status),
-            CommandHandler("debug", debug_url),
-            CommandHandler("sensitivity", sensitivity)
+            CommandHandler("debug", debug_url)
         ]
         
         for handler in handlers:
@@ -1346,10 +907,8 @@ def main():
         print(f"📡 Bot will respond to chat ID: {CHAT_ID}")
         print("✅ Bot is ready! Send /start to test.")
         
-        # Remove the async bot test that was breaking the code
-        print("🧪 Bot connection will be tested when polling starts...")
-        
-        application.run_polling()
+        # Start polling with proper cleanup
+        application.run_polling(drop_pending_updates=True)
         
     except KeyboardInterrupt:
         print("\n🛑 Graceful shutdown requested")
@@ -1359,23 +918,16 @@ def main():
         if not IS_RENDER:
             input("Press Enter to exit...")
     finally:
-        print("🧹 Cleaning up driver pool...")
-        if driver_pool:
-            driver_pool.cleanup()
         print("🧹 Cleanup complete")
 
 if __name__ == "__main__":
-    print("Memory-optimized script starting (512MB RAM)...")
+    print("🚀 Starting Zealy monitoring bot...")
     try:
         main()
     except Exception as e:
         print(f"❌ CRITICAL ERROR in __main__: {str(e)}")
         print(traceback.format_exc())
-        input("Press Enter to exit...")
+        if not IS_RENDER:
+            input("Press Enter to exit...")
     finally:
-        # Final cleanup
-        try:
-            if 'driver_pool' in globals() and driver_pool:
-                driver_pool.cleanup()
-        except:
-            pass
+        print("👋 Bot shutdown complete")
