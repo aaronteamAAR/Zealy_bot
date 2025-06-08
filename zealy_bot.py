@@ -277,135 +277,118 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
     """Get content hash for URL with RELIABLE settings (not fast)"""
     driver = None
     start_time = time.time()
+    max_retries = 3
+    retry_count = 0
     
-    try:
-        print(f"🌐 Loading URL with generous timeouts: {url}")
-        driver = create_driver()
-        
-        if not driver:
-            return None, time.time() - start_time, "Failed to create driver", None
-        
-        print(f"🔄 Navigating to URL...")
-        driver.get(url)
-        
-        print(f"⏳ Waiting {REACT_WAIT_TIME} seconds for React to fully render...")
-        time.sleep(REACT_WAIT_TIME)
-        
-        print("⏳ Looking for page elements with generous timeouts...")
-        # Try different selectors with generous timeouts
-        selectors = [
-            ZEALY_CONTAINER_SELECTOR,
-            "div[class*='flex'][class*='flex-col']",
-            "main",
-            "body"
-        ]
-        
-        container = None
-        for selector in selectors:
-            try:
-                print(f"🔍 Trying selector: {selector}")
-                container = WebDriverWait(driver, ELEMENT_WAIT_TIMEOUT).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                )
-                print(f"✅ Found element with selector: {selector}")
-                break
-            except TimeoutException:
-                print(f"⚠️ Selector {selector} not found after {ELEMENT_WAIT_TIMEOUT}s, trying next...")
+    while retry_count < max_retries:
+        try:
+            print(f"🌐 Loading URL with generous timeouts: {url} (Attempt {retry_count + 1}/{max_retries})")
+            driver = create_driver()
+            
+            if not driver:
+                return None, time.time() - start_time, "Failed to create driver", None
+            
+            print(f"🔄 Navigating to URL...")
+            driver.set_page_load_timeout(REQUEST_TIMEOUT)
+            driver.get(url)
+            
+            print("⏳ Looking for page elements with generous timeouts...")
+            # Try different selectors with generous timeouts
+            selectors = [
+                ZEALY_CONTAINER_SELECTOR,
+                "div[class*='flex'][class*='flex-col']",
+                "main",
+                "body"
+            ]
+            
+            container = None
+            for selector in selectors:
+                try:
+                    print(f"🔍 Trying selector: {selector}")
+                    container = WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    print(f"✅ Found element with selector: {selector}")
+                    break
+                except TimeoutException:
+                    print(f"⚠️ Selector {selector} not found after 15s, trying next...")
+                    continue
+            
+            if not container:
+                print(f"❌ No suitable container found after trying all selectors")
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    time.sleep(5)  # Wait before retry
+                    continue
+                return None, time.time() - start_time, "No suitable container found", None
+            
+            # Wait a bit more for content to load
+            time.sleep(2)
+            
+            content = container.text
+            
+            if not content or len(content.strip()) < 10:
+                print(f"⚠️ Content too short: {len(content)} chars")
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    time.sleep(5)  # Wait before retry
+                    continue
+                return None, time.time() - start_time, f"Content too short: {len(content)} chars", None
+            
+            print(f"📄 Content retrieved successfully, length: {len(content)} chars")
+            
+            # Use the simpler content cleaning from second code
+            clean_content = re.sub(
+                r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', 
+                '', 
+                content
+            )
+            
+            print(f"📄 Content cleaned, original: {len(content)} chars, cleaned: {len(clean_content)} chars")
+            
+            content_hash = hashlib.sha256(clean_content.strip().encode()).hexdigest()
+            response_time = time.time() - start_time
+            
+            # Return sample for debugging if requested
+            content_sample = content[:500] if debug_mode else None
+            
+            print(f"🔢 Hash generated: {content_hash[:8]}... in {response_time:.2f}s")
+            return content_hash, response_time, None, content_sample
+            
+        except TimeoutException:
+            print(f"⚠️ Timeout waiting for page elements on {url}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(5)
                 continue
-        
-        if not container:
-            print(f"❌ No suitable container found after trying all selectors")
-            return None, time.time() - start_time, "No suitable container found", None
-        
-        print("⏳ Additional wait for content to stabilize...")
-        time.sleep(3)  # Additional wait for content stability
-        
-        content = container.text
-        
-        if not content or len(content.strip()) < 10:
-            print(f"⚠️ Content too short: {len(content)} chars")
-            return None, time.time() - start_time, f"Content too short: {len(content)} chars", None
-        
-        print(f"📄 Content retrieved successfully, length: {len(content)} chars")
-        
-        # Enhanced content cleaning to remove dynamic elements
-        clean_content = content
-        
-        # Remove timestamps and dates
-        clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?', '', clean_content)
-        clean_content = re.sub(r'\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?', '', clean_content)
-        clean_content = re.sub(r'(?:\d+\s*(?:seconds?|mins?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago)', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'(?:just now|moments? ago|recently)', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove XP and point systems
-        clean_content = re.sub(r'\d+\s*(?:XP|points?|pts)', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'(?:XP|points?|pts)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove UUIDs and session identifiers
-        clean_content = re.sub(r'\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'\b[a-f0-9]{32}\b', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'\b[a-f0-9]{40}\b', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove view counts and engagement metrics
-        clean_content = re.sub(r'\d+\s*(?:views?|likes?|shares?|comments?|replies?)', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'(?:views?|likes?|shares?|comments?|replies?)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove online/active user counts
-        clean_content = re.sub(r'\d+\s*(?:online|active|members?|users?)', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'(?:online|active|members?|users?)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove progress indicators and percentages
-        clean_content = re.sub(r'\d+%|\d+/\d+', '', clean_content)
-        clean_content = re.sub(r'(?:progress|completed|remaining)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove dynamic counters
-        clean_content = re.sub(r'\d+\s*(?:total|count|number)', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'(?:total|count|number)\s*:\s*\d+', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove rank and position indicators
-        clean_content = re.sub(r'(?:rank|position)\s*#?\d+', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'#\d+\s*(?:rank|position)', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove session-specific data
-        clean_content = re.sub(r'session\s*[a-f0-9]+', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'token\s*[a-f0-9]+', '', clean_content, flags=re.IGNORECASE)
-        
-        # Remove loading states
-        clean_content = re.sub(r'(?:loading|refreshing|updating)\.{0,3}', '', clean_content, flags=re.IGNORECASE)
-        
-        # Normalize whitespace
-        clean_content = re.sub(r'\s+', ' ', clean_content)
-        clean_content = clean_content.strip()
-        
-        # Additional Zealy-specific filtering
-        clean_content = re.sub(r'(?:quest|task)\s+\d+\s*(?:of|/)\s*\d+', '', clean_content, flags=re.IGNORECASE)
-        clean_content = re.sub(r'(?:day|week|month)\s+\d+', '', clean_content, flags=re.IGNORECASE)
-        
-        print(f"📄 Content cleaned, original: {len(content)} chars, cleaned: {len(clean_content)} chars")
-        
-        content_hash = hashlib.sha256(clean_content.encode()).hexdigest()
-        response_time = time.time() - start_time
-        
-        # Return sample for debugging if requested
-        content_sample = content[:500] if debug_mode else None
-        
-        print(f"🔢 Hash generated: {content_hash[:8]}... in {response_time:.2f}s")
-        return content_hash, response_time, None, content_sample
-        
-    except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        print(f"❌ {error_msg}")
-        print(f"❌ Full traceback: {traceback.format_exc()}")
-        return None, time.time() - start_time, error_msg, None
-        
-    finally:
-        if driver:
-            try:
-                print("🔄 Closing driver...")
-                driver.quit()
-                print("✅ Driver closed successfully")
-            except Exception as e:
-                print(f"⚠️ Error closing driver: {e}")
+            return None, time.time() - start_time, "Timeout waiting for page elements", None
+        except WebDriverException as e:
+            print(f"⚠️ WebDriver error: {str(e)}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(5)
+                continue
+            return None, time.time() - start_time, f"WebDriver error: {str(e)}", None
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"❌ Full traceback: {traceback.format_exc()}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(5)
+                continue
+            return None, time.time() - start_time, error_msg, None
+            
+        finally:
+            if driver:
+                try:
+                    print("🔄 Closing driver...")
+                    driver.quit()
+                    print("✅ Driver closed successfully")
+                except Exception as e:
+                    print(f"⚠️ Error closing driver: {e}")
+    
+    return None, time.time() - start_time, "Max retries reached", None
 
 async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Optional[str]]:
     """Check a single URL for changes with generous retry logic"""
