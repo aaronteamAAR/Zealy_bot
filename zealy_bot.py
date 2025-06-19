@@ -6,9 +6,11 @@ import time
 import os
 import traceback
 import sys
+import gc
+import json
 from datetime import datetime
 import platform
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Dict, Optional, Tuple, List
 import threading
 from queue import Queue, Empty
@@ -143,6 +145,11 @@ PAGE_LOAD_TIMEOUT = 120  # 2 minutes for page load
 ELEMENT_WAIT_TIMEOUT = 30  # 30 seconds for elements
 REACT_WAIT_TIME = 8  # 8 seconds for React to load
 
+# Memory Management Configuration
+MEMORY_LIMIT_MB = 480  # Set limit to 480MB to restart before hitting 512MB
+MEMORY_CHECK_INTERVAL = 10  # Check memory every 10 seconds
+STATE_FILE = "bot_state.json"  # File to persist bot state
+
 # Set Chrome paths
 if IS_RENDER:
     CHROME_PATH = '/usr/bin/chromium'
@@ -153,6 +160,138 @@ elif platform.system() == "Windows":
 else:
     CHROME_PATH = '/usr/bin/google-chrome'
     CHROMEDRIVER_PATH = shutil.which('chromedriver') or '/usr/bin/chromedriver'
+
+def get_memory_usage():
+    """Get current memory usage in MB"""
+    try:
+        process = psutil.Process(os.getpid())
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        return memory_mb
+    except Exception as e:
+        print(f"⚠️ Error getting memory usage: {e}")
+        return 0
+
+def save_bot_state():
+    """Save current bot state to file"""
+    try:
+        state = {
+            "monitored_urls": {},
+            "is_monitoring": is_monitoring,
+            "timestamp": time.time()
+        }
+        
+        # Convert URLData objects to dictionaries
+        for url, url_data in monitored_urls.items():
+            state["monitored_urls"][url] = asdict(url_data)
+        
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2)
+        print(f"💾 Bot state saved to {STATE_FILE}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving bot state: {e}")
+        return False
+
+def load_bot_state():
+    """Load bot state from file"""
+    global monitored_urls, is_monitoring
+    try:
+        if not os.path.exists(STATE_FILE):
+            print("📁 No previous state file found, starting fresh")
+            return False
+        
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+        
+        # Restore monitored URLs
+        monitored_urls.clear()
+        for url, url_data_dict in state.get("monitored_urls", {}).items():
+            monitored_urls[url] = URLData(**url_data_dict)
+        
+        # Don't restore monitoring state - let user manually restart
+        is_monitoring = False
+        
+        print(f"📁 Restored {len(monitored_urls)} URLs from previous session")
+        if len(monitored_urls) > 0:
+            print("⚠️ Monitoring was stopped during restart. Use /run to resume monitoring.")
+        return True
+    except Exception as e:
+        print(f"❌ Error loading bot state: {e}")
+        return False
+
+def cleanup_memory():
+    """Force garbage collection and cleanup"""
+    try:
+        print("🧹 Performing memory cleanup...")
+        
+        # Force garbage collection
+        collected = gc.collect()
+        print(f"🗑️ Garbage collected: {collected} objects")
+        
+        # Clear any Chrome processes that might be hanging
+        try:
+            for proc in psutil.process_iter(['pid', 'name']):
+                if 'chrome' in proc.info['name'].lower() or 'chromium' in proc.info['name'].lower():
+                    try:
+                        proc.kill()
+                        print(f"🔪 Killed hanging Chrome process: {proc.info['pid']}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        except Exception as e:
+            print(f"⚠️ Error cleaning Chrome processes: {e}")
+        
+        memory_after = get_memory_usage()
+        print(f"📊 Memory after cleanup: {memory_after:.1f}MB")
+        
+    except Exception as e:
+        print(f"❌ Error during memory cleanup: {e}")
+
+async def memory_monitor():
+    """Background task to monitor memory usage"""
+    global is_monitoring
+    
+    while True:
+        try:
+            memory_mb = get_memory_usage()
+            
+            if memory_mb > MEMORY_LIMIT_MB:
+                print(f"🚨 MEMORY LIMIT REACHED: {memory_mb:.1f}MB > {MEMORY_LIMIT_MB}MB")
+                print("💾 Saving state and preparing for restart...")
+                
+                # Save current state
+                save_bot_state()
+                
+                # Send notification about restart
+                try:
+                    # Get the bot instance - we'll need to pass it properly
+                    from telegram import Bot
+                    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+                    await bot.send_message(
+                        chat_id=CHAT_ID, 
+                        text=f"🔄 AUTOMATIC RESTART\nMemory limit reached: {memory_mb:.1f}MB\nBot restarting to clear memory...\nState saved - URLs preserved!"
+                    )
+                except Exception as e:
+                    print(f"⚠️ Could not send restart notification: {e}")
+                
+                print("🔄 Initiating restart...")
+                
+                # Cleanup before restart
+                cleanup_memory()
+                
+                # Restart the script
+                python = sys.executable
+                os.execl(python, python, *sys.argv)
+            
+            elif memory_mb > MEMORY_LIMIT_MB * 0.8:  # Warning at 80% of limit
+                print(f"⚠️ Memory warning: {memory_mb:.1f}MB (80% of {MEMORY_LIMIT_MB}MB limit)")
+                # Perform light cleanup
+                gc.collect()
+            
+            await asyncio.sleep(MEMORY_CHECK_INTERVAL)
+            
+        except Exception as e:
+            print(f"❌ Error in memory monitor: {e}")
+            await asyncio.sleep(30)  # Wait longer on error
 
 def kill_previous_instances():
     """Kill any previous bot instances"""
@@ -194,6 +333,12 @@ def get_chrome_options():
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
     
+    # Additional memory optimization for 512MB limit
+    options.add_argument("--max-old-space-size=256")  # Reduced heap size
+    options.add_argument("--aggressive-cache-discard")
+    options.add_argument("--disable-background-mode")
+    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
+    
     if IS_RENDER:
         # Render-specific settings - minimal but necessary
         options.add_argument("--disable-setuid-sandbox")
@@ -202,13 +347,11 @@ def get_chrome_options():
         options.add_argument("--single-process")
         options.add_argument("--no-zygote")
         options.add_argument("--disable-dev-tools")
-        # Generous memory limits
-        options.add_argument("--max_old_space_size=1024")  # 1GB heap
-        options.add_argument("--js-flags=--max-old-space-size=1024")
+        # Conservative memory limits for Render
+        options.add_argument("--js-flags=--max-old-space-size=256")
     else:
-        # Local development - even more generous
-        options.add_argument("--max_old_space_size=2048")  # 2GB heap
-        options.add_argument("--js-flags=--max-old-space-size=2048")
+        # Local development - still conservative
+        options.add_argument("--js-flags=--max-old-space-size=512")
     
     # Set Chrome binary path
     if os.path.exists(CHROME_PATH):
@@ -385,6 +528,8 @@ def get_content_hash_fast(url: str, debug_mode: bool = False) -> Tuple[Optional[
                     print("🔄 Closing driver...")
                     driver.quit()
                     print("✅ Driver closed successfully")
+                    # Force cleanup after each driver use
+                    gc.collect()
                 except Exception as e:
                     print(f"⚠️ Error closing driver: {e}")
     
@@ -494,6 +639,13 @@ async def check_urls_sequential(bot):
     for idx, (url, url_data) in enumerate(list(monitored_urls.items()), 1):
         try:
             print(f"\n🔄 Processing URL {idx}/{len(monitored_urls)}: {url}")
+            
+            # Check memory before each URL check
+            memory_mb = get_memory_usage()
+            if memory_mb > MEMORY_LIMIT_MB * 0.9:  # 90% of limit
+                print(f"⚠️ Memory getting high ({memory_mb:.1f}MB), forcing cleanup...")
+                cleanup_memory()
+            
             result = await check_single_url(url, url_data)
             
             if isinstance(result, Exception):
@@ -546,6 +698,9 @@ async def check_urls_sequential(bot):
         print(f"🗑️ Removed {url} after {FAILURE_THRESHOLD} failures")
     
     print(f"✅ Sequential check complete: {changes_detected} changes, {len(urls_to_remove)} removed")
+    
+    # Save state after each check cycle
+    save_bot_state()
 
 # AUTH MIDDLEWARE
 async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -564,8 +719,9 @@ async def auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # COMMAND HANDLERS
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📨 /start command received!")
+    memory_mb = get_memory_usage()
     await update.message.reply_text(
-        "🚀 Zealy Monitoring Bot (RELIABLE MODE)\n\n"
+        "🚀 Zealy Monitoring Bot (MEMORY-MANAGED MODE)\n\n"
         "Commands:\n"
         "/add <url> - Add Zealy URL to monitor\n"
         "/remove <number> - Remove URL by number\n"
@@ -575,11 +731,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/status - Show monitoring statistics\n"
         "/debug <number> - Debug URL content\n"
         "/purge - Remove all URLs\n"
+        "/memory - Show memory usage\n"
         f"\nMax URLs: {MAX_URLS}\n"
         f"Check interval: {CHECK_INTERVAL}s\n"
-        f"Page timeout: {PAGE_LOAD_TIMEOUT}s\n"
-        f"Element timeout: {ELEMENT_WAIT_TIMEOUT}s\n"
-        "Configured for RELIABILITY over speed!"
+        f"Memory limit: {MEMORY_LIMIT_MB}MB\n"
+        f"Current memory: {memory_mb:.1f}MB\n"
+        "🔄 Auto-restart when memory limit reached!"
+    )
+
+async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current memory usage and statistics"""
+    memory_mb = get_memory_usage()
+    memory_percent = (memory_mb / MEMORY_LIMIT_MB) * 100
+    
+    status_emoji = "🟢" if memory_percent < 60 else "🟡" if memory_percent < 80 else "🔴"
+    
+    await update.message.reply_text(
+        f"📊 Memory Status:\n\n"
+        f"{status_emoji} Current usage: {memory_mb:.1f}MB\n"
+        f"📏 Limit: {MEMORY_LIMIT_MB}MB\n"
+        f"📈 Usage: {memory_percent:.1f}%\n"
+        f"⚠️ Warning at: {MEMORY_LIMIT_MB * 0.8:.1f}MB (80%)\n"
+        f"🔄 Auto-restart at: {MEMORY_LIMIT_MB}MB\n\n"
+        f"💾 State file: {'✅ Exists' if os.path.exists(STATE_FILE) else '❌ Missing'}\n"
+        f"🔍 URLs monitored: {len(monitored_urls)}\n"
+        f"📡 Monitoring active: {'✅ Yes' if is_monitoring else '❌ No'}"
     )
 
 async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -604,24 +780,23 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ℹ️ URL already monitored")
         return
     
+    memory_mb = get_memory_usage()
+    if memory_mb > MEMORY_LIMIT_MB * 0.85:  # Don't add URLs if memory is too high
+        await update.message.reply_text(
+            f"⚠️ Memory usage too high ({memory_mb:.1f}MB)\n"
+            f"Please wait for automatic restart or use /memory to check status"
+        )
+        return
+    
     processing_msg = await update.message.reply_text(
-        f"⏳ Verifying URL with generous timeouts...\n"
-        f"This may take up to {PAGE_LOAD_TIMEOUT + ELEMENT_WAIT_TIMEOUT + REACT_WAIT_TIME} seconds.\n"
-        f"Please be patient for reliability!"
+        f"⏳ Verifying URL...\n"
+        f"Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB\n"
+        f"This may take up to {REQUEST_TIMEOUT} seconds."
     )
     
     try:
         loop = asyncio.get_event_loop()
-        print(f"🔄 Getting initial hash for {url} with generous timeouts...")
-        
-        # Update user with progress
-        try:
-            await processing_msg.edit_text(
-                f"⏳ Loading {url}...\n"
-                f"Step 1/3: Creating browser session..."
-            )
-        except:
-            pass
+        print(f"🔄 Getting initial hash for {url}...")
         
         initial_hash, response_time, error, content_sample = await loop.run_in_executor(
             None, get_content_hash_fast, url, False
@@ -641,12 +816,17 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             avg_response_time=response_time
         )
         
+        # Save state immediately after adding URL
+        save_bot_state()
+        
         print(f"✅ URL added successfully: {url}")
+        memory_after = get_memory_usage()
         await processing_msg.edit_text(
             f"✅ Successfully added: {url}\n"
             f"📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}\n"
             f"⚡ Initial load time: {response_time:.2f}s\n"
-            f"🔢 Content hash: {initial_hash[:12]}..."
+            f"🔢 Content hash: {initial_hash[:12]}...\n"
+            f"💾 Memory: {memory_after:.1f}MB/{MEMORY_LIMIT_MB}MB"
         )
         
     except Exception as e:
@@ -662,6 +842,7 @@ async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 No URLs monitored")
         return
     
+    memory_mb = get_memory_usage()
     message_lines = ["📋 Monitored URLs:\n"]
     for idx, (url, data) in enumerate(monitored_urls.items(), 1):
         status = "✅" if data.failures == 0 else f"⚠️({data.failures})"
@@ -669,7 +850,8 @@ async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_lines.append(f"{idx}. {status} {url}{avg_time}")
     
     message_lines.append(f"\n📊 Using {len(monitored_urls)}/{MAX_URLS} slots")
-    message_lines.append(f"⚙️ Reliable mode: {PAGE_LOAD_TIMEOUT}s page timeout")
+    message_lines.append(f"💾 Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB")
+    message_lines.append(f"⚙️ Auto-restart enabled")
     message = "\n".join(message_lines)[:4000]
     await update.message.reply_text(message)
 
@@ -693,8 +875,14 @@ async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url_to_remove = url_list[url_index]
         del monitored_urls[url_to_remove]
         
+        # Save state after removing URL
+        save_bot_state()
+        
+        memory_mb = get_memory_usage()
         await update.message.reply_text(
-            f"✅ Removed: {url_to_remove}\n📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}"
+            f"✅ Removed: {url_to_remove}\n"
+            f"📊 Now monitoring: {len(monitored_urls)}/{MAX_URLS}\n"
+            f"💾 Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB"
         )
         print(f"🗑️ Manually removed URL: {url_to_remove}")
         
@@ -709,6 +897,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📊 No URLs being monitored")
         return
     
+    memory_mb = get_memory_usage()
     status_lines = ["📊 Monitoring Statistics:\n"]
     
     total_checks = 0
@@ -735,10 +924,12 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Summary statistics
     overall_avg = sum(avg_response_times) / len(avg_response_times) if avg_response_times else 0
+    memory_percent = (memory_mb / MEMORY_LIMIT_MB) * 100
     status_lines.append(f"📈 Total checks: {total_checks} | Total failures: {total_failures}")
     status_lines.append(f"📈 Overall avg response: {overall_avg:.2f}s")
     status_lines.append(f"🔄 Monitoring: {'✅ Active' if is_monitoring else '❌ Stopped'}")
-    status_lines.append(f"⚙️ Reliable mode: {PAGE_LOAD_TIMEOUT}s timeout")
+    status_lines.append(f"💾 Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB ({memory_percent:.1f}%)")
+    status_lines.append(f"🔄 Auto-restart: {'🟢 Ready' if memory_percent < 90 else '🟡 Soon' if memory_percent < 95 else '🔴 Imminent'}")
     
     message = "\n".join(status_lines)[:4000]
     await update.message.reply_text(message)
@@ -758,9 +949,19 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         url = url_list[url_index]
+        memory_mb = get_memory_usage()
+        
+        if memory_mb > MEMORY_LIMIT_MB * 0.85:
+            await update.message.reply_text(
+                f"⚠️ Memory too high for debug ({memory_mb:.1f}MB)\n"
+                f"Please wait for automatic restart"
+            )
+            return
+        
         processing_msg = await update.message.reply_text(
             f"🔍 Debugging content for: {url}\n"
-            f"⏳ This will use reliable mode with generous timeouts..."
+            f"💾 Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB\n"
+            f"⏳ This may take up to {REQUEST_TIMEOUT} seconds..."
         )
         
         # Get content in debug mode
@@ -771,6 +972,7 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if hash_result:
             current_data = monitored_urls[url]
+            memory_after = get_memory_usage()
             debug_info = [
                 f"🔍 Debug Info for URL #{url_index + 1}:",
                 f"📄 Current hash: {current_data.hash[:16]}...",
@@ -780,6 +982,7 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 Check count: {current_data.check_count}",
                 f"❌ Failures: {current_data.failures}",
                 f"🕐 Last checked: {time.time() - current_data.last_checked:.0f}s ago",
+                f"💾 Memory: {memory_after:.1f}MB/{MEMORY_LIMIT_MB}MB",
                 "",
                 "📝 Content sample (first 500 chars):",
                 f"```{content_sample[:500] if content_sample else 'No sample available'}```"
@@ -808,19 +1011,33 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ No URLs to monitor")
         return
     
+    memory_mb = get_memory_usage()
+    if memory_mb > MEMORY_LIMIT_MB * 0.9:
+        await update.message.reply_text(
+            f"⚠️ Memory usage too high ({memory_mb:.1f}MB)\n"
+            f"Please wait for automatic restart"
+        )
+        return
+    
     try:
         is_monitoring = True
+        
+        # Start memory monitor task
+        memory_task = asyncio.create_task(memory_monitor())
+        context.chat_data['memory_task'] = memory_task
+        
+        # Start monitoring task
         monitor_task = asyncio.create_task(start_monitoring(context.application.bot))
         context.chat_data['monitor_task'] = monitor_task
         
         await update.message.reply_text(
-            f"✅ Monitoring started in RELIABLE mode!\n"
+            f"✅ Monitoring started with memory management!\n"
             f"🔍 Checking {len(monitored_urls)} URLs every {CHECK_INTERVAL}s\n"
-            f"⚙️ Page timeout: {PAGE_LOAD_TIMEOUT}s\n"
-            f"⚙️ Element timeout: {ELEMENT_WAIT_TIMEOUT}s\n"
-            f"💾 Sequential processing for stability"
+            f"💾 Memory limit: {MEMORY_LIMIT_MB}MB (current: {memory_mb:.1f}MB)\n"
+            f"🔄 Auto-restart when limit reached\n"
+            f"💾 State auto-saved after each cycle"
         )
-        print("✅ Monitoring tasks created and started in reliable mode")
+        print("✅ Monitoring and memory management tasks started")
         
     except Exception as e:
         is_monitoring = False
@@ -840,34 +1057,63 @@ async def stop_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"⚠️ Error cancelling monitor task: {str(e)}")
     
-    await update.message.reply_text("🛑 Monitoring stopped")
+    # Cancel memory monitor task
+    if 'memory_task' in context.chat_data:
+        try:
+            context.chat_data['memory_task'].cancel()
+            del context.chat_data['memory_task']
+            print("🛑 Memory monitor task cancelled")
+        except Exception as e:
+            print(f"⚠️ Error cancelling memory task: {str(e)}")
+    
+    # Save state when stopping
+    save_bot_state()
+    
+    memory_mb = get_memory_usage()
+    await update.message.reply_text(
+        f"🛑 Monitoring stopped\n"
+        f"💾 State saved\n"
+        f"Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB"
+    )
 
 async def purge_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitored_urls
     count = len(monitored_urls)
     monitored_urls.clear()
-    await update.message.reply_text(f"✅ All {count} URLs purged!")
+    
+    # Save state after purging
+    save_bot_state()
+    
+    memory_mb = get_memory_usage()
+    await update.message.reply_text(
+        f"✅ All {count} URLs purged!\n"
+        f"💾 Memory: {memory_mb:.1f}MB/{MEMORY_LIMIT_MB}MB"
+    )
 
 async def start_monitoring(bot):
-    """Main monitoring loop with detailed logging"""
+    """Main monitoring loop with detailed logging and memory management"""
     global is_monitoring
-    await send_notification(bot, "🔔 Monitoring started in RELIABLE mode!")
-    print("🔍 Entering monitoring loop with generous timeouts")
+    await send_notification(bot, "🔔 Monitoring started with memory management!")
+    print("🔍 Entering monitoring loop with memory management")
     
     cycle_count = 0
     
     while is_monitoring:
         try:
             cycle_count += 1
+            memory_mb = get_memory_usage()
             print(f"\n🔄 Starting monitoring cycle #{cycle_count}")
-            print(f"🔄 Checking {len(monitored_urls)} URLs with reliable settings")
+            print(f"🔄 Checking {len(monitored_urls)} URLs | Memory: {memory_mb:.1f}MB")
             start_time = time.time()
             
             await check_urls_sequential(bot)
             
             elapsed = time.time() - start_time
             wait_time = max(CHECK_INTERVAL - elapsed, 5)  # Minimum 5 second wait
-            print(f"✓ Cycle #{cycle_count} complete in {elapsed:.2f}s, waiting {wait_time:.2f}s")
+            
+            memory_after = get_memory_usage()
+            print(f"✓ Cycle #{cycle_count} complete in {elapsed:.2f}s")
+            print(f"💾 Memory: {memory_after:.1f}MB/{MEMORY_LIMIT_MB}MB, waiting {wait_time:.2f}s")
             
             await asyncio.sleep(wait_time)
             
@@ -885,7 +1131,7 @@ async def start_monitoring(bot):
     await send_notification(bot, "🔴 Monitoring stopped!")
 
 def main():
-    """Main function with comprehensive setup"""
+    """Main function with comprehensive setup and memory management"""
     try:
         global CHROME_PATH, CHROMEDRIVER_PATH
         
@@ -894,15 +1140,19 @@ def main():
         print(f"🌍 Running on Render: {IS_RENDER}")
         print(f"💾 Chrome path: {CHROME_PATH}")
         print(f"💾 Chromedriver path: {CHROMEDRIVER_PATH}")
-        print(f"⚙️ RELIABLE MODE - Generous timeouts enabled")
-        print(f"⚙️ Page load timeout: {PAGE_LOAD_TIMEOUT}s")
-        print(f"⚙️ Element wait timeout: {ELEMENT_WAIT_TIMEOUT}s")
-        print(f"⚙️ React wait time: {REACT_WAIT_TIME}s")
-        print(f"⚙️ Max retries: {MAX_RETRIES}")
-        print(f"⚙️ Failure threshold: {FAILURE_THRESHOLD}")
+        print(f"⚙️ MEMORY-MANAGED MODE - {MEMORY_LIMIT_MB}MB limit")
+        print(f"⚙️ Memory check interval: {MEMORY_CHECK_INTERVAL}s")
+        print(f"⚙️ Auto-restart enabled")
+        
+        # Load previous state
+        load_bot_state()
         
         # Kill previous instances
         kill_previous_instances()
+        
+        # Show initial memory usage
+        initial_memory = get_memory_usage()
+        print(f"📊 Initial memory usage: {initial_memory:.1f}MB")
         
         if not IS_RENDER:
             print(f"📂 Chrome exists: {os.path.exists(CHROME_PATH)}")
@@ -962,7 +1212,8 @@ def main():
             CommandHandler("stop", stop_monitoring),
             CommandHandler("purge", purge_urls),
             CommandHandler("status", status),
-            CommandHandler("debug", debug_url)
+            CommandHandler("debug", debug_url),
+            CommandHandler("memory", memory_status)  # New memory command
         ]
         
         for handler in handlers:
@@ -970,10 +1221,10 @@ def main():
         
         print("✅ All handlers added")
 
-        print("🚀 Starting polling with reliable settings...")
+        print("🚀 Starting polling with memory management...")
         print(f"📡 Bot will respond to chat ID: {CHAT_ID}")
         print("✅ Bot is ready! Send /start to test.")
-        print("⚙️ RELIABLE MODE: Taking time to ensure quality results!")
+        print(f"⚙️ MEMORY-MANAGED MODE: Auto-restart at {MEMORY_LIMIT_MB}MB!")
         
         # Start polling with proper cleanup and generous timeouts
         application.run_polling(
@@ -986,21 +1237,24 @@ def main():
         
     except KeyboardInterrupt:
         print("\n🛑 Graceful shutdown requested")
+        save_bot_state()
     except Exception as e:
         print(f"❌ CRITICAL ERROR: {str(e)}")
         print(f"❌ Full traceback: {traceback.format_exc()}")
+        save_bot_state()  # Save state even on error
         if not IS_RENDER:
             input("Press Enter to exit...")
     finally:
         print("🧹 Cleanup complete")
 
 if __name__ == "__main__":
-    print("🚀 Starting Zealy monitoring bot in RELIABLE mode...")
+    print("🚀 Starting Zealy monitoring bot with memory management...")
     try:
         main()
     except Exception as e:
         print(f"❌ CRITICAL ERROR in __main__: {str(e)}")
         print(f"❌ Full traceback: {traceback.format_exc()}")
+        save_bot_state()  # Save state even on critical error
         if not IS_RENDER:
             input("Press Enter to exit...")
     finally:

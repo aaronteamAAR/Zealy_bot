@@ -1,0 +1,16 @@
+{
+  "monitored_urls": {
+    "https://zealy.io/cw/looftacreatorshub/questboard/": {
+      "hash": "68e63c169ef03b28f0db479c40a7805f29ccac951c326859d16d63099eed7190",
+      "last_notified": 0,
+      "last_checked": 1750334511.7969487,
+      "failures": 0,
+      "consecutive_successes": 1,
+      "last_error": null,
+      "check_count": 1,
+      "avg_response_time": 10.126246452331543
+    }
+  },
+  "is_monitoring": false,
+  "timestamp": 1750334511.7969487
+}
