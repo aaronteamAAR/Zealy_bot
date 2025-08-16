@@ -1,0 +1,27 @@
+{
+  "monitored_urls": {
+    "https://zealy.io/cw/nfaxyz/questboard/sprints": {
+      "hash": "a8a5815d58be67afb82cd4d0f895ab35c97c7748e20637b2acca9d2f6f38db87",
+      "last_notified": 0,
+      "last_checked": 1755364916.0452206,
+      "failures": 0,
+      "consecutive_successes": 7,
+      "last_error": null,
+      "check_count": 7,
+      "avg_response_time": 3.6395243020386685,
+      "total_changes": 0,
+      "added_time": 0
+    }
+  },
+  "is_monitoring": false,
+  "timestamp": 1755364927.7322228,
+  "auto_restart": false,
+  "stats": {
+    "total_checks": 1,
+    "total_changes": 0,
+    "cache_hits": 1,
+    "cache_misses": 1,
+    "total_errors": 0,
+    "start_time": 1755364884.9049506
+  }
+}
