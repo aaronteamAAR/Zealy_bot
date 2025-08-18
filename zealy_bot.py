@@ -16,40 +16,31 @@ import threading
 from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-
-# First check if required packages are installed
-try:
-    import psutil
-    from dotenv import load_dotenv
-    import chromedriver_autoinstaller
-    from telegram import Update
-    from telegram.ext import (
-        Application,
-        CommandHandler,
-        ContextTypes,
-        ApplicationHandlerStop,
-        MessageHandler,
-        filters
-    )
-    from telegram.error import TelegramError, NetworkError
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import (
-        StaleElementReferenceException,
-        WebDriverException,
-        TimeoutException,
-        NoSuchElementException
-    )
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-except ImportError as e:
-    print(f"ERROR: Missing required package: {str(e)}")
-    print("Please install required packages using:")
-    print("pip install python-telegram-bot selenium python-dotenv psutil chromedriver-autoinstaller")
-    sys.exit(1)
+import psutil
+from dotenv import load_dotenv
+import chromedriver_autoinstaller
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ApplicationHandlerStop,
+    MessageHandler,
+    filters
+)
+from telegram.error import TelegramError, NetworkError
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (
+    StaleElementReferenceException,
+    WebDriverException,
+    TimeoutException,
+    NoSuchElementException
+)
 
 # DEFINE IS_RENDER FIRST
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
@@ -624,11 +615,13 @@ async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Opti
         try:
             print(f"\n🔄 Checking URL (attempt {retry_count + 1}/{MAX_RETRIES}): {url}")
             loop = asyncio.get_event_loop()
+            
+            # IMPORTANT: Don't use cache when checking for changes!
             hash_result, response_time, error, content_sample = await loop.run_in_executor(
                 None,
                 get_content_hash_optimized,
                 url,
-                False,  # Don't use cache for checking
+                False,  # DON'T use cache when checking for changes
                 False   # Not debug mode
             )
             
@@ -649,7 +642,7 @@ async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Opti
                     print(f"❌ Max retries reached. Failure #{url_data.failures}/{FAILURE_THRESHOLD}")
                     return url, False, last_error
             
-            # Success case
+            # Success case - Update statistics
             url_data.failures = 0
             url_data.consecutive_successes += 1
             url_data.last_error = None
@@ -657,21 +650,24 @@ async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Opti
             url_data.update_response_time(response_time)
             url_data.last_checked = time.time()
             
-            # Check for changes
-            has_changes = url_data.hash != hash_result
-            if has_changes:
+            # CRITICAL: Check for changes by comparing hashes
+            has_changes = False
+            if url_data.hash and url_data.hash != hash_result:
+                has_changes = True
                 print(f"🔔 CHANGE DETECTED for {url}")
                 print(f"   Old hash: {url_data.hash[:16]}...")
                 print(f"   New hash: {hash_result[:16]}...")
-                url_data.hash = hash_result
                 url_data.total_changes += 1
                 stats['total_changes'] += 1
-                return url, True, None
             else:
                 print(f"✓ No changes for {url}")
-                print(f"   Hash: {hash_result[:16]}...")
+                print(f"   Current hash: {hash_result[:16]}...")
                 print(f"   Response time: {response_time:.2f}s (avg: {url_data.avg_response_time:.2f}s)")
-                return url, False, None
+            
+            # Always update the hash after comparison
+            url_data.hash = hash_result
+            
+            return url, has_changes, None
                 
         except Exception as e:
             retry_count += 1
@@ -689,6 +685,26 @@ async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Opti
                 return url, False, last_error
     
     return url, False, last_error
+
+def process_url_result(url, has_changes, error, url_data, changes_detected, urls_to_remove, current_time):
+    """Process the result of a URL check"""
+    if has_changes:
+        # Check rate limiting for notifications
+        if current_time - url_data.last_notified > 60:
+            changes_detected.append({
+                'url': url,
+                'response_time': url_data.avg_response_time,
+                'check_count': url_data.check_count,
+                'total_changes': url_data.total_changes
+            })
+            url_data.last_notified = current_time
+        else:
+            print(f"🔕 Change detected but notification rate limited for {url}")
+    
+    # Handle failures
+    if url_data.failures > FAILURE_THRESHOLD:
+        urls_to_remove.append(url)
+        print(f"🗑️ Marking {url} for removal after {url_data.failures} failures")
 
 async def check_urls_parallel(bot):
     """Check URLs in parallel for maximum speed"""
@@ -720,7 +736,7 @@ async def check_urls_parallel(bot):
         if memory_mb > MEMORY_CRITICAL_MB:
             print(f"⚠️ Memory critical: {memory_mb:.1f}MB - cleaning up")
             cleanup_memory()
-            time.sleep(2)
+            await asyncio.sleep(2)
         
         # Create tasks for parallel execution
         tasks = []
@@ -775,7 +791,7 @@ async def check_urls_parallel(bot):
             f"🕐 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
             f"━━━━━━━━━━━━━━━━━━"
         )
-        asyncio.create_task(notification_queue.put((notification, True)))
+        await notification_queue.put((notification, True))
     
     # Remove failed URLs
     for url in urls_to_remove:
@@ -790,40 +806,12 @@ async def check_urls_parallel(bot):
                 f"⚠️ **Last Error:** {url_data.last_error or 'Unknown'}\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
-            asyncio.create_task(notification_queue.put((notification, False)))
+            await notification_queue.put((notification, False))
     
     print(f"\n{'='*60}")
     print(f"✅ Parallel check complete: {len(changes_detected)} changes, {len(urls_to_remove)} removed")
     print(f"{'='*60}\n")
     save_bot_state()
-
-async def process_url_result(url, has_changes, error, url_data, changes_detected, urls_to_remove, current_time, bot):
-    """Process the result of a URL check"""
-    if has_changes:
-        # Check rate limiting for notifications
-        if current_time - url_data.last_notified > 60:
-            changes_detected.append({
-                'url': url,
-                'response_time': url_data.avg_response_time,
-                'check_count': url_data.check_count,
-                'total_changes': url_data.total_changes
-            })
-            url_data.last_notified = current_time
-        else:
-            print(f"🔕 Change detected but notification rate limited for {url}")
-    
-    # Handle failures
-    if url_data.failures > FAILURE_THRESHOLD:
-        urls_to_remove.append(url)
-        print(f"🗑️ Marking {url} for removal after {url_data.failures} failures")
-    elif url_data.failures > 3 and url_data.consecutive_successes == 0:
-        await notification_queue.put((
-            f"⚠️ **Monitoring Issues**\n"
-            f"URL: {url}\n"
-            f"Failures: {url_data.failures}/{FAILURE_THRESHOLD}\n"
-            f"Last error: {url_data.last_error or 'Unknown'}",
-            False
-        ))
 
 async def check_urls_sequential(bot):
     """Check URLs sequentially for maximum reliability"""
@@ -851,7 +839,7 @@ async def check_urls_sequential(bot):
                 print(f"🚨 CRITICAL MEMORY: {memory_mb:.1f}MB")
                 save_bot_state()
                 cleanup_memory()
-                await asyncio.sleep(2)  # Use await for async sleep
+                await asyncio.sleep(2)
             elif memory_mb > MEMORY_WARNING_MB:
                 print(f"⚠️ HIGH MEMORY: {memory_mb:.1f}MB")
                 cleanup_memory()
@@ -866,8 +854,31 @@ async def check_urls_sequential(bot):
             
             url_data = monitored_urls[url]
             
-            # Process the result using the separate function
-            await process_url_result(url, has_changes, error, url_data, changes_detected, urls_to_remove, current_time, bot)
+            if has_changes:
+                # Check rate limiting for notifications
+                if current_time - url_data.last_notified > 60:
+                    changes_detected.append({
+                        'url': url,
+                        'response_time': url_data.avg_response_time,
+                        'check_count': url_data.check_count,
+                        'total_changes': url_data.total_changes
+                    })
+                    url_data.last_notified = current_time
+                else:
+                    print(f"🔕 Change detected but notification rate limited")
+            
+            # Handle failures
+            if url_data.failures > FAILURE_THRESHOLD:
+                urls_to_remove.append(url)
+                print(f"🗑️ Marking {url} for removal after {url_data.failures} failures")
+            elif url_data.failures > 3 and url_data.consecutive_successes == 0:
+                await notification_queue.put((
+                    f"⚠️ **Monitoring Issues**\n"
+                    f"URL: {url}\n"
+                    f"Failures: {url_data.failures}/{FAILURE_THRESHOLD}\n"
+                    f"Last error: {url_data.last_error or 'Unknown'}",
+                    False
+                ))
                 
         except Exception as e:
             print(f"⚠️ Error processing URL {url}: {e}")
@@ -1627,6 +1638,8 @@ async def set_speed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{'⚠️ Restart monitoring for changes to take effect' if is_monitoring else '✅ Ready to use new settings'}",
         parse_mode='Markdown'
     )
+
+async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_monitoring
     
     if is_monitoring:
