@@ -54,10 +54,10 @@ except ImportError as e:
 # DEFINE IS_RENDER FIRST
 IS_RENDER = os.getenv('IS_RENDER', 'false').lower() == 'true'
 
-print(f"🚀 Starting Zealy Bot - TURBO 2GB VERSION")
+print(f"🚀 Starting Zealy Bot - FIXED VERSION")
 print(f"📍 Working directory: {os.getcwd()}")
 print(f"🐍 Python version: {sys.version}")
-print(f"⚡ Performance Mode: ENABLED")
+print(f"⚡ Performance Mode: OPTIMIZED")
 
 # Load environment variables
 if not IS_RENDER:
@@ -122,24 +122,25 @@ try:
 except Exception as e:
     print(f"⚠️ ChromeDriver auto-install warning: {e}")
 
-# TURBO Configuration for 2GB RAM
-CHECK_INTERVAL = 10  # Check every 10 seconds
+# Configuration for speed with reliability
+CHECK_INTERVAL = 30  # Check every 30 seconds
 MAX_URLS = 50  # Support up to 50 URLs
 ZEALY_CONTAINER_SELECTOR = "div.flex.flex-col.w-full.pt-100"
-REQUEST_TIMEOUT = 20  # 20 second timeout
-MAX_RETRIES = 2  # 2 retries max
-RETRY_DELAY_BASE = 2  # 2 second base delay
-FAILURE_THRESHOLD = 3  # Remove after 3 failures
-PAGE_LOAD_TIMEOUT = 30  # 30 seconds max page load
-ELEMENT_WAIT_TIMEOUT = 10  # 10 seconds element wait
-REACT_WAIT_TIME = 3  # 3 seconds for React
+REQUEST_TIMEOUT = 30  # 30 second timeout (reduced from 60)
+MAX_RETRIES = 2  # 2 retries max (reduced from 3)
+RETRY_DELAY_BASE = 3  # 3 second base delay (reduced from 5)
+FAILURE_THRESHOLD = 5  # Remove after 5 failures
+PAGE_LOAD_TIMEOUT = 60  # 60 seconds max page load (reduced from 120)
+ELEMENT_WAIT_TIMEOUT = 15  # 15 seconds element wait (reduced from 30)
+REACT_WAIT_TIME = 4  # 4 seconds for React (reduced from 8)
 
 # Performance Configuration
 MAX_PARALLEL_CHECKS = 5  # Check 5 URLs simultaneously
-MAX_DRIVER_POOL_SIZE = 3  # Keep 3 drivers in pool
+MAX_DRIVER_POOL_SIZE = 5  # Keep 5 drivers in pool (increased)
 DRIVER_REUSE_COUNT = 10  # Reuse each driver 10 times
 BATCH_SIZE = 10  # Process in batches of 10
 USE_DRIVER_POOL = True  # Enable driver pooling
+USE_SEQUENTIAL_MODE = False  # Use parallel mode for SPEED (changed from True)
 
 # Memory Management Configuration - 2GB optimized
 MEMORY_LIMIT_MB = 1800  # Alert at 1.8GB
@@ -272,51 +273,50 @@ def cleanup_memory():
                 content_cache.clear()
             print("🧹 Cleared content cache")
         
+        # Kill any hanging Chrome processes
+        try:
+            for proc in psutil.process_iter(['pid', 'name']):
+                if 'chrome' in proc.info['name'].lower() or 'chromium' in proc.info['name'].lower():
+                    try:
+                        proc.kill()
+                        print(f"🔪 Killed hanging Chrome process: {proc.info['pid']}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        except Exception as e:
+            print(f"⚠️ Error cleaning Chrome processes: {e}")
+        
         return get_memory_usage()
     except Exception as e:
         print(f"❌ Error during cleanup: {e}")
         return get_memory_usage()
 
 def get_chrome_options():
-    """Get optimized Chrome options for SPEED"""
+    """Get optimized Chrome options for reliability"""
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,720")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    options.add_argument("--window-size=1920,1080")  # Larger window for better rendering
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    # Speed optimizations
-    options.add_argument("--disable-images")
-    options.add_argument("--disable-javascript-harmony-shipping")
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-site-isolation-trials")
-    options.add_argument("--disable-features=VizDisplayCompositor")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+    # KEEP JavaScript enabled - Zealy needs it!
+    # Disable only non-essential features
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-translate")
     
-    # Performance flags
-    options.add_argument("--aggressive-cache-discard")
+    # Memory optimization
+    options.add_argument("--memory-pressure-off")
     options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
     
-    # Page load strategy
-    options.page_load_strategy = 'eager'
-    
-    # Prefs for speed
-    prefs = {
-        "profile.default_content_setting_values": {
-            "images": 2,
-            "plugins": 2,
-            "popups": 2,
-            "geolocation": 2,
-            "notifications": 2,
-            "media_stream": 2,
-        }
-    }
-    options.add_experimental_option("prefs", prefs)
+    # Page load strategy - set to normal for reliability
+    options.page_load_strategy = 'normal'
     
     if IS_RENDER:
         options.add_argument("--disable-setuid-sandbox")
@@ -356,7 +356,7 @@ is_monitoring = False
 notification_queue = asyncio.Queue()
 
 def create_driver():
-    """Create an optimized Chrome driver"""
+    """Create an optimized Chrome driver with proper timeouts"""
     try:
         options = get_chrome_options()
         
@@ -367,11 +367,7 @@ def create_driver():
             driver = webdriver.Chrome(service=service, options=options)
         
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-        driver.implicitly_wait(3)
-        
-        # Block resources for speed
-        driver.execute_cdp_cmd('Network.setBlockedURLs', {"urls": ["*.jpg", "*.png", "*.gif", "*.css"]})
-        driver.execute_cdp_cmd('Network.enable', {})
+        driver.implicitly_wait(10)  # Increased implicit wait for reliability
         
         return driver
     except Exception as e:
@@ -468,70 +464,231 @@ def set_cached_content(url: str, hash_val: str):
             for old_url, _ in sorted_items[:len(content_cache) - CACHE_SIZE]:
                 del content_cache[old_url]
 
-def get_content_hash_optimized(url: str, use_cache: bool = True) -> Tuple[Optional[str], float, Optional[str], Optional[str]]:
-    """Optimized content hash retrieval"""
+def clean_zealy_content(content: str) -> str:
+    """Clean Zealy content to remove dynamic elements"""
+    # Remove timestamps in various formats
+    clean_content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', '', content)
+    
+    # Remove XP values
+    clean_content = re.sub(r'\d+\s*XP', '', clean_content)
+    
+    # Remove UUIDs
+    clean_content = re.sub(r'\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', '', clean_content, flags=re.IGNORECASE)
+    
+    # Remove relative time (e.g., "2 hours ago", "5 minutes ago")
+    clean_content = re.sub(r'\d+\s*(hours?|minutes?|seconds?|days?|weeks?|months?)\s*ago', '', clean_content, flags=re.IGNORECASE)
+    
+    # Remove time displays (e.g., "12:45 PM", "23:30")
+    clean_content = re.sub(r'\d{1,2}:\d{2}\s*(AM|PM|am|pm)?', '', clean_content)
+    
+    # Remove member counts (e.g., "1234 members")
+    clean_content = re.sub(r'\d+\s*members?', '', clean_content, flags=re.IGNORECASE)
+    
+    # Remove dates in various formats
+    clean_content = re.sub(r'\d{1,2}/\d{1,2}/\d{2,4}', '', clean_content)
+    clean_content = re.sub(r'\d{1,2}-\d{1,2}-\d{2,4}', '', clean_content)
+    
+    # Remove any remaining numbers that might be dynamic (like counts, IDs)
+    # Be careful not to remove important content numbers
+    clean_content = re.sub(r'\b\d{4,}\b', '', clean_content)  # Remove long numbers (likely IDs)
+    
+    # Remove extra whitespace
+    clean_content = re.sub(r'\s+', ' ', clean_content)
+    
+    return clean_content.strip()
+
+def get_content_hash_optimized(url: str, use_cache: bool = True, debug_mode: bool = False) -> Tuple[Optional[str], float, Optional[str], Optional[str]]:
+    """Get content hash with proper retry logic and content cleaning"""
     start_time = time.time()
     
-    if use_cache:
+    if use_cache and not debug_mode:
         cached = get_cached_content(url)
         if cached:
             hash_val, _ = cached
             return hash_val, 0.1, None, None
     
-    driver = None
-    from_pool = False
+    max_retries = 3
+    retry_count = 0
     
-    try:
-        driver, from_pool = get_driver_from_pool()
-        if not driver:
-            return None, time.time() - start_time, "Failed to create driver", None
+    while retry_count < max_retries:
+        driver = None
+        from_pool = False
         
-        driver.get(url)
-        
-        content = None
-        strategies = [
-            (By.CSS_SELECTOR, ZEALY_CONTAINER_SELECTOR, 5),
-            (By.CSS_SELECTOR, "div[class*='flex']", 3),
-            (By.TAG_NAME, "main", 2),
-            (By.TAG_NAME, "body", 1)
-        ]
-        
-        for by, selector, wait_time in strategies:
-            try:
-                element = WebDriverWait(driver, wait_time).until(
-                    EC.presence_of_element_located((by, selector))
-                )
-                content = element.text
-                if content and len(content.strip()) > 10:
-                    break
-            except TimeoutException:
+        try:
+            print(f"🌐 Loading URL: {url} (Attempt {retry_count + 1}/{max_retries})")
+            driver, from_pool = get_driver_from_pool()
+            if not driver:
+                return None, time.time() - start_time, "Failed to create driver", None
+            
+            print(f"🔄 Navigating to URL...")
+            driver.get(url)
+            
+            # Wait for React to load
+            print(f"⏳ Waiting {REACT_WAIT_TIME}s for React to load...")
+            time.sleep(REACT_WAIT_TIME)
+            
+            print("🔍 Looking for page elements...")
+            content = None
+            strategies = [
+                (By.CSS_SELECTOR, ZEALY_CONTAINER_SELECTOR, ELEMENT_WAIT_TIMEOUT),
+                (By.CSS_SELECTOR, "div[class*='flex'][class*='flex-col']", 15),
+                (By.CSS_SELECTOR, "main", 10),
+                (By.TAG_NAME, "body", 5)
+            ]
+            
+            for by, selector, wait_time in strategies:
+                try:
+                    print(f"   Trying selector: {selector} (wait: {wait_time}s)")
+                    element = WebDriverWait(driver, wait_time).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    
+                    # Wait a bit more for content to stabilize
+                    time.sleep(2)
+                    
+                    content = element.text
+                    if content and len(content.strip()) > 10:
+                        print(f"   ✅ Found content with selector: {selector} ({len(content)} chars)")
+                        break
+                except TimeoutException:
+                    print(f"   ⚠️ Selector {selector} not found after {wait_time}s")
+                    continue
+            
+            if not content or len(content.strip()) < 10:
+                print(f"⚠️ Content too short: {len(content) if content else 0} chars")
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    time.sleep(RETRY_DELAY_BASE)
+                    continue
+                return None, time.time() - start_time, "No content found", None
+            
+            print(f"📄 Raw content length: {len(content)} chars")
+            
+            # Clean content using our improved cleaning function
+            clean_content = clean_zealy_content(content)
+            
+            print(f"📄 Cleaned content length: {len(clean_content)} chars")
+            
+            # Generate hash from cleaned content
+            content_hash = hashlib.sha256(clean_content.encode()).hexdigest()
+            response_time = time.time() - start_time
+            
+            # Return sample for debugging if requested
+            content_sample = f"RAW:\n{content[:250]}\n\nCLEANED:\n{clean_content[:250]}" if debug_mode else None
+            
+            if use_cache and not debug_mode:
+                set_cached_content(url, content_hash)
+            
+            stats['total_checks'] += 1
+            
+            print(f"🔢 Hash generated: {content_hash[:16]}... in {response_time:.2f}s")
+            return content_hash, response_time, None, content_sample
+            
+        except TimeoutException:
+            print(f"⚠️ Timeout waiting for page on {url}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(RETRY_DELAY_BASE)
                 continue
-        
-        if not content or len(content.strip()) < 10:
-            return None, time.time() - start_time, "No content found", None
-        
-        clean_content = re.sub(
-            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d+ XP|\b[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}\b', 
-            '', 
-            content
-        )
-        
-        content_hash = hashlib.sha256(clean_content.strip().encode()).hexdigest()
-        response_time = time.time() - start_time
-        
-        if use_cache:
-            set_cached_content(url, content_hash)
-        
-        stats['total_checks'] += 1
-        
-        return content_hash, response_time, None, None
-        
-    except Exception as e:
-        stats['total_errors'] += 1
-        return None, time.time() - start_time, str(e), None
-    finally:
-        if driver:
-            return_driver_to_pool(driver)
+            stats['total_errors'] += 1
+            return None, time.time() - start_time, "Timeout waiting for page", None
+        except WebDriverException as e:
+            print(f"⚠️ WebDriver error: {str(e)}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(RETRY_DELAY_BASE)
+                continue
+            stats['total_errors'] += 1
+            return None, time.time() - start_time, f"WebDriver error: {str(e)}", None
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+            if retry_count < max_retries - 1:
+                retry_count += 1
+                time.sleep(RETRY_DELAY_BASE)
+                continue
+            stats['total_errors'] += 1
+            return None, time.time() - start_time, str(e), None
+        finally:
+            if driver:
+                return_driver_to_pool(driver)
+                gc.collect()
+    
+    return None, time.time() - start_time, "Max retries reached", None
+
+async def check_single_url(url: str, url_data: URLData) -> Tuple[str, bool, Optional[str]]:
+    """Check a single URL for changes with proper retry logic"""
+    retry_count = 0
+    last_error = None
+    
+    while retry_count < MAX_RETRIES:
+        try:
+            print(f"\n🔄 Checking URL (attempt {retry_count + 1}/{MAX_RETRIES}): {url}")
+            loop = asyncio.get_event_loop()
+            hash_result, response_time, error, content_sample = await loop.run_in_executor(
+                None,
+                get_content_hash_optimized,
+                url,
+                False,  # Don't use cache for checking
+                False   # Not debug mode
+            )
+            
+            if hash_result is None:
+                retry_count += 1
+                last_error = error or "Unknown error"
+                
+                if retry_count < MAX_RETRIES:
+                    delay = RETRY_DELAY_BASE * retry_count
+                    print(f"⏳ Retrying {url} in {delay:.1f}s")
+                    print(f"⚠️ Last error: {last_error}")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    url_data.failures += 1
+                    url_data.consecutive_successes = 0
+                    url_data.last_error = last_error
+                    print(f"❌ Max retries reached. Failure #{url_data.failures}/{FAILURE_THRESHOLD}")
+                    return url, False, last_error
+            
+            # Success case
+            url_data.failures = 0
+            url_data.consecutive_successes += 1
+            url_data.last_error = None
+            url_data.check_count += 1
+            url_data.update_response_time(response_time)
+            url_data.last_checked = time.time()
+            
+            # Check for changes
+            has_changes = url_data.hash != hash_result
+            if has_changes:
+                print(f"🔔 CHANGE DETECTED for {url}")
+                print(f"   Old hash: {url_data.hash[:16]}...")
+                print(f"   New hash: {hash_result[:16]}...")
+                url_data.hash = hash_result
+                url_data.total_changes += 1
+                stats['total_changes'] += 1
+                return url, True, None
+            else:
+                print(f"✓ No changes for {url}")
+                print(f"   Hash: {hash_result[:16]}...")
+                print(f"   Response time: {response_time:.2f}s (avg: {url_data.avg_response_time:.2f}s)")
+                return url, False, None
+                
+        except Exception as e:
+            retry_count += 1
+            last_error = f"Unexpected error: {str(e)}"
+            print(f"⚠️ Error checking {url}: {last_error}")
+            
+            if retry_count < MAX_RETRIES:
+                delay = RETRY_DELAY_BASE * retry_count
+                print(f"⏳ Retrying after error in {delay}s...")
+                await asyncio.sleep(delay)
+            else:
+                url_data.failures += 1
+                url_data.consecutive_successes = 0
+                url_data.last_error = last_error
+                return url, False, last_error
+    
+    return url, False, last_error
 
 async def check_urls_parallel(bot):
     """Check URLs in parallel for maximum speed"""
@@ -544,103 +701,193 @@ async def check_urls_parallel(bot):
     urls_to_check = list(monitored_urls.items())
     total_urls = len(urls_to_check)
     
-    print(f"🚀 Checking {total_urls} URLs in parallel")
+    print(f"\n{'='*60}")
+    print(f"🚀 PARALLEL CHECK: {total_urls} URLs with {MAX_PARALLEL_CHECKS} workers")
+    print(f"{'='*60}")
     
     changes_detected = []
     urls_to_remove = []
     
+    # Process URLs in batches for memory efficiency
     for batch_start in range(0, total_urls, BATCH_SIZE):
         batch_end = min(batch_start + BATCH_SIZE, total_urls)
         batch = urls_to_check[batch_start:batch_end]
         
-        print(f"📦 Batch {batch_start//BATCH_SIZE + 1}/{(total_urls + BATCH_SIZE - 1)//BATCH_SIZE}")
+        print(f"\n📦 Processing batch {batch_start//BATCH_SIZE + 1}/{(total_urls + BATCH_SIZE - 1)//BATCH_SIZE}")
         
+        # Memory check before batch
         memory_mb = get_memory_usage()
         if memory_mb > MEMORY_CRITICAL_MB:
-            print(f"⚠️ Memory critical: {memory_mb:.1f}MB")
+            print(f"⚠️ Memory critical: {memory_mb:.1f}MB - cleaning up")
             cleanup_memory()
-            await asyncio.sleep(2)
+            time.sleep(2)
         
-        loop = asyncio.get_event_loop()
-        futures = []
-        
+        # Create tasks for parallel execution
+        tasks = []
         for url, url_data in batch:
-            future = loop.run_in_executor(
-                executor,
-                get_content_hash_optimized,
-                url,
-                True
-            )
-            futures.append((url, url_data, future))
+            # Limit concurrent checks
+            if len(tasks) >= MAX_PARALLEL_CHECKS:
+                # Wait for some tasks to complete
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    try:
+                        result = await task
+                        # Process result
+                        url_result, has_changes, error = result
+                        if url_result in monitored_urls:
+                            process_url_result(url_result, has_changes, error, 
+                                             monitored_urls[url_result], changes_detected, 
+                                             urls_to_remove, current_time)
+                    except Exception as e:
+                        print(f"❌ Task error: {e}")
+                tasks = list(pending)
+            
+            # Add new task
+            task = asyncio.create_task(check_single_url(url, url_data))
+            tasks.append(task)
         
-        for url, url_data, future in futures:
-            try:
-                hash_result, response_time, error, _ = await future
-                
-                if hash_result is None:
-                    url_data.failures += 1
-                    url_data.consecutive_successes = 0
-                    url_data.last_error = error
-                    
-                    if url_data.failures > FAILURE_THRESHOLD:
-                        urls_to_remove.append(url)
-                        print(f"❌ {url} - {url_data.failures} failures")
+        # Wait for remaining tasks in batch
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    print(f"❌ Task exception: {result}")
                 else:
-                    url_data.failures = 0
-                    url_data.consecutive_successes += 1
-                    url_data.last_error = None
-                    url_data.check_count += 1
-                    url_data.update_response_time(response_time)
-                    url_data.last_checked = current_time
-                    
-                    if url_data.hash != hash_result:
-                        url_data.total_changes += 1
-                        stats['total_changes'] += 1
-                        old_hash = url_data.hash[:8]
-                        url_data.hash = hash_result
-                        
-                        if current_time - url_data.last_notified > 60:
-                            changes_detected.append({
-                                'url': url,
-                                'old_hash': old_hash,
-                                'new_hash': hash_result[:8],
-                                'response_time': response_time,
-                                'check_count': url_data.check_count,
-                                'total_changes': url_data.total_changes
-                            })
-                            url_data.last_notified = current_time
-                        
-                        print(f"🔔 Change: {url}")
-                    else:
-                        print(f"✓ No change: {url} ({response_time:.2f}s)")
-                        
-            except Exception as e:
-                print(f"❌ Error: {url}: {e}")
-                url_data.failures += 1
+                    url_result, has_changes, error = result
+                    if url_result in monitored_urls:
+                        process_url_result(url_result, has_changes, error,
+                                         monitored_urls[url_result], changes_detected,
+                                         urls_to_remove, current_time)
         
+        # Small delay between batches
         if batch_end < total_urls:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
     
-    # Send detailed notifications for changes
-    if changes_detected:
-        for change in changes_detected:
-            notification = (
-                f"🚨 **CHANGE DETECTED!**\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"📍 **URL:** {change['url']}\n"
-                f"🔄 **Hash Changed:**\n"
-                f"  Old: `{change['old_hash']}...`\n"
-                f"  New: `{change['new_hash']}...`\n"
-                f"⚡ **Response Time:** {change['response_time']:.2f}s\n"
-                f"📊 **Statistics:**\n"
-                f"  • Check #{change['check_count']}\n"
-                f"  • Total changes: {change['total_changes']}\n"
-                f"🕐 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
-                f"━━━━━━━━━━━━━━━━━━"
-            )
-            await notification_queue.put((notification, True))
+    # Send notifications for changes
+    for change in changes_detected:
+        notification = (
+            f"🚨 **CHANGE DETECTED!**\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📍 **URL:** {change['url']}\n"
+            f"⚡ **Response Time:** {change['response_time']:.2f}s\n"
+            f"📊 **Check #{change['check_count']}**\n"
+            f"🔄 **Total changes:** {change['total_changes']}\n"
+            f"🕐 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+        asyncio.create_task(notification_queue.put((notification, True)))
     
     # Remove failed URLs
+    for url in urls_to_remove:
+        if url in monitored_urls:
+            url_data = monitored_urls[url]
+            del monitored_urls[url]
+            notification = (
+                f"🔴 **URL REMOVED**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📍 **URL:** {url}\n"
+                f"❌ **Failures:** {url_data.failures}\n"
+                f"⚠️ **Last Error:** {url_data.last_error or 'Unknown'}\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+            asyncio.create_task(notification_queue.put((notification, False)))
+    
+    print(f"\n{'='*60}")
+    print(f"✅ Parallel check complete: {len(changes_detected)} changes, {len(urls_to_remove)} removed")
+    print(f"{'='*60}\n")
+    save_bot_state()
+
+async def process_url_result(url, has_changes, error, url_data, changes_detected, urls_to_remove, current_time, bot):
+    """Process the result of a URL check"""
+    if has_changes:
+        # Check rate limiting for notifications
+        if current_time - url_data.last_notified > 60:
+            changes_detected.append({
+                'url': url,
+                'response_time': url_data.avg_response_time,
+                'check_count': url_data.check_count,
+                'total_changes': url_data.total_changes
+            })
+            url_data.last_notified = current_time
+        else:
+            print(f"🔕 Change detected but notification rate limited for {url}")
+    
+    # Handle failures
+    if url_data.failures > FAILURE_THRESHOLD:
+        urls_to_remove.append(url)
+        print(f"🗑️ Marking {url} for removal after {url_data.failures} failures")
+    elif url_data.failures > 3 and url_data.consecutive_successes == 0:
+        await notification_queue.put((
+            f"⚠️ **Monitoring Issues**\n"
+            f"URL: {url}\n"
+            f"Failures: {url_data.failures}/{FAILURE_THRESHOLD}\n"
+            f"Last error: {url_data.last_error or 'Unknown'}",
+            False
+        ))
+
+async def check_urls_sequential(bot):
+    """Check URLs sequentially for maximum reliability"""
+    global monitored_urls
+    current_time = time.time()
+    
+    if not monitored_urls:
+        print("⚠️ No URLs to check")
+        return
+    
+    print(f"\n{'='*60}")
+    print(f"🔍 Starting sequential check of {len(monitored_urls)} URLs")
+    print(f"{'='*60}")
+    
+    changes_detected = []
+    urls_to_remove = []
+    
+    for idx, (url, url_data) in enumerate(list(monitored_urls.items()), 1):
+        try:
+            print(f"\n📍 URL {idx}/{len(monitored_urls)}: {url}")
+            
+            # Check memory before each URL check
+            memory_mb = get_memory_usage()
+            if memory_mb > MEMORY_CRITICAL_MB:
+                print(f"🚨 CRITICAL MEMORY: {memory_mb:.1f}MB")
+                save_bot_state()
+                cleanup_memory()
+                await asyncio.sleep(2)  # Use await for async sleep
+            elif memory_mb > MEMORY_WARNING_MB:
+                print(f"⚠️ HIGH MEMORY: {memory_mb:.1f}MB")
+                cleanup_memory()
+            
+            result = await check_single_url(url, url_data)
+            
+            url, has_changes, error = result
+            
+            if url not in monitored_urls:
+                print(f"⚠️ URL {url} was removed during processing")
+                continue
+            
+            url_data = monitored_urls[url]
+            
+            # Process the result using the separate function
+            await process_url_result(url, has_changes, error, url_data, changes_detected, urls_to_remove, current_time, bot)
+                
+        except Exception as e:
+            print(f"⚠️ Error processing URL {url}: {e}")
+            print(f"⚠️ Full traceback: {traceback.format_exc()}")
+    
+    # Send notifications for changes
+    for change in changes_detected:
+        notification = (
+            f"🚨 **CHANGE DETECTED!**\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📍 **URL:** {change['url']}\n"
+            f"⚡ **Avg Response:** {change['response_time']:.2f}s\n"
+            f"📊 **Check #{change['check_count']}**\n"
+            f"🔄 **Total changes:** {change['total_changes']}\n"
+            f"🕐 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+        await notification_queue.put((notification, True))
+    
+    # Remove problematic URLs
     for url in urls_to_remove:
         url_data = monitored_urls[url]
         del monitored_urls[url]
@@ -657,7 +904,9 @@ async def check_urls_parallel(bot):
         )
         await notification_queue.put((notification, False))
     
-    print(f"✅ Complete: {len(changes_detected)} changes, {len(urls_to_remove)} removed")
+    print(f"\n{'='*60}")
+    print(f"✅ Sequential check complete: {len(changes_detected)} changes, {len(urls_to_remove)} removed")
+    print(f"{'='*60}\n")
     save_bot_state()
 
 async def notification_sender(bot):
@@ -737,12 +986,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hours = uptime // 3600
     minutes = (uptime % 3600) // 60
     
+    mode = "Parallel (Fast) 🚀" if not USE_SEQUENTIAL_MODE else "Sequential (Reliable) 🔒"
+    
     welcome_msg = (
-        "🚀 **ZEALY TURBO BOT v2.0**\n"
+        "🚀 **ZEALY BOT v2.0 TURBO**\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "⚡ **PERFORMANCE MODE ACTIVE**\n"
-        f"• Parallel Checks: {MAX_PARALLEL_CHECKS} URLs\n"
-        f"• Check Interval: {CHECK_INTERVAL}s\n"
+        f"⚡ **CURRENT MODE: {mode}**\n"
+        f"• Workers: {MAX_PARALLEL_CHECKS if not USE_SEQUENTIAL_MODE else 1}\n"
+        f"• Check Interval: Every {CHECK_INTERVAL}s\n"
         f"• Max URLs: {MAX_URLS}\n"
         f"• Driver Pool: {MAX_DRIVER_POOL_SIZE} drivers\n"
         f"• Cache Size: {CACHE_SIZE} entries\n\n"
@@ -753,14 +1004,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/run` - Start monitoring\n"
         "`/stop` - Stop monitoring\n"
         "`/status` - Detailed statistics\n"
+        "`/debug <num>` - Debug URL content\n"
         "`/clear` - Clear cache & pools\n"
         "`/memory` - Memory usage\n"
+        "`/mode` - Toggle Fast/Reliable mode\n"
+        "`/speed` - Adjust speed settings\n"
         "`/help` - Show this message\n\n"
         f"💾 **SYSTEM STATUS:**\n"
         f"• Memory: {memory_mb:.1f}/{MEMORY_LIMIT_MB}MB\n"
         f"• Uptime: {hours}h {minutes}m\n"
         f"• Total Checks: {stats['total_checks']}\n"
-        f"• Total Changes: {stats['total_changes']}\n"
+        f"• Total Changes: {stats['total_changes']}\n\n"
+        "💡 **TIP:** Use `/mode` to switch between:\n"
+        "• **Fast Mode**: Up to 5x faster, parallel checks\n"
+        "• **Reliable Mode**: Sequential, stable, lower memory\n"
         "━━━━━━━━━━━━━━━━━━"
     )
     
@@ -819,7 +1076,7 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⏳ **Verifying URL...**\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🔍 Checking: {url}\n"
-        f"⚡ Using Turbo Mode\n"
+        f"⏱️ This may take up to {REQUEST_TIMEOUT}s\n"
         f"Please wait...",
         parse_mode='Markdown'
     )
@@ -827,10 +1084,11 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         loop = asyncio.get_event_loop()
         hash_result, response_time, error, _ = await loop.run_in_executor(
-            executor,
+            None,
             get_content_hash_optimized,
             url,
-            False
+            False,  # Don't use cache
+            False   # Not debug mode
         )
         
         if not hash_result:
@@ -866,7 +1124,7 @@ async def add_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📍 **URL:** {url}\n"
             f"⚡ **Initial Load:** {response_time:.2f}s\n"
-            f"🔢 **Hash:** `{hash_result[:12]}...`\n"
+            f"🔢 **Hash:** `{hash_result[:16]}...`\n"
             f"📊 **Status:**\n"
             f"  • Slot: {len(monitored_urls)}/{MAX_URLS}\n"
             f"  • Memory: {get_memory_usage():.1f}MB\n"
@@ -996,6 +1254,126 @@ async def remove_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
+async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug command to see what content is being retrieved and how it's cleaned"""
+    if not context.args:
+        await update.message.reply_text(
+            "❌ **Invalid Usage**\n\n"
+            "**Correct format:**\n"
+            "`/debug <number>`\n\n"
+            "Use `/list` to see URL numbers",
+            parse_mode='Markdown'
+        )
+        return
+    
+    try:
+        idx = int(context.args[0]) - 1
+        urls = list(monitored_urls.keys())
+        
+        if idx < 0 or idx >= len(urls):
+            await update.message.reply_text(
+                f"❌ **Invalid Number**\n\n"
+                f"Please use a number between 1 and {len(urls)}",
+                parse_mode='Markdown'
+            )
+            return
+        
+        url = urls[idx]
+        url_data = monitored_urls[url]
+        
+        msg = await update.message.reply_text(
+            f"🔍 **Debugging URL...**\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📍 URL: {url}\n"
+            f"⏳ This may take up to {REQUEST_TIMEOUT}s...",
+            parse_mode='Markdown'
+        )
+        
+        loop = asyncio.get_event_loop()
+        
+        # Get fresh content without cache
+        hash_result, response_time, error, content_sample = await loop.run_in_executor(
+            None,
+            get_content_hash_optimized,
+            url,
+            False,  # Don't use cache
+            True    # Debug mode ON - returns content sample
+        )
+        
+        if hash_result:
+            # Check if hash matches
+            if url_data.hash:
+                if url_data.hash == hash_result:
+                    change_status = "✅ **NO CHANGE** (Hashes match)"
+                else:
+                    change_status = "🔄 **CHANGE DETECTED!** (Hashes differ)"
+            else:
+                change_status = "🆕 **FIRST CHECK** (No previous hash)"
+            
+            # Split content sample if provided
+            raw_content = ""
+            cleaned_content = ""
+            if content_sample:
+                parts = content_sample.split("\n\nCLEANED:\n")
+                if len(parts) == 2:
+                    raw_content = parts[0].replace("RAW:\n", "")
+                    cleaned_content = parts[1]
+                else:
+                    raw_content = content_sample[:400]
+            
+            debug_text = (
+                f"🔍 **DEBUG RESULTS**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📍 **URL:** {url}\n\n"
+                f"**🔄 Change Detection:**\n"
+                f"{change_status}\n\n"
+                f"**📊 Hash Comparison:**\n"
+                f"• Stored: `{url_data.hash[:16] if url_data.hash else 'None'}...`\n"
+                f"• Current: `{hash_result[:16]}...`\n"
+                f"• Match: {'Yes ✅' if url_data.hash == hash_result else 'No ❌' if url_data.hash else 'N/A (first check)'}\n\n"
+                f"**⚡ Performance:**\n"
+                f"• Response Time: {response_time:.2f}s\n"
+                f"• Avg Response: {url_data.avg_response_time:.2f}s\n\n"
+                f"**📈 Statistics:**\n"
+                f"• Total Checks: {url_data.check_count}\n"
+                f"• Total Changes: {url_data.total_changes}\n"
+                f"• Failures: {url_data.failures}\n"
+                f"• Last Check: {format_time_ago(url_data.last_checked)}\n\n"
+                f"**📄 RAW Content (first 250 chars):**\n"
+                f"```\n{raw_content[:250] if raw_content else 'No raw content'}\n```\n\n"
+                f"**🧹 CLEANED Content (first 250 chars):**\n"
+                f"```\n{cleaned_content[:250] if cleaned_content else 'No cleaned content'}\n```\n\n"
+                f"💡 **Note:** The cleaned content is what gets hashed for change detection."
+            )
+            
+            await msg.edit_text(debug_text[:4000], parse_mode='Markdown')
+        else:
+            await msg.edit_text(
+                f"❌ **Debug Failed**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📍 URL: {url}\n"
+                f"⚠️ Error: {error}\n\n"
+                f"**Troubleshooting:**\n"
+                f"• Check if the URL is accessible\n"
+                f"• Try increasing timeouts with `/speed slow`\n"
+                f"• Check memory with `/memory`",
+                parse_mode='Markdown'
+            )
+            
+    except ValueError:
+        await update.message.reply_text(
+            "❌ **Invalid Number**\n\n"
+            "Please provide a valid number",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ **Debug Error**\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"Error: {str(e)[:100]}",
+            parse_mode='Markdown'
+        )
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not monitored_urls:
         await update.message.reply_text(
@@ -1051,7 +1429,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Pool Usage: {pool_usage} operations\n"
         f"• Cache Entries: {cache_size}/{CACHE_SIZE}\n"
         f"• Cache Hit Rate: {cache_hit_rate:.1f}%\n"
-        f"• Parallel Workers: {MAX_PARALLEL_CHECKS}\n\n"
+        f"• Mode: {'Sequential' if USE_SEQUENTIAL_MODE else 'Parallel'}\n\n"
         f"**💾 SYSTEM RESOURCES**\n"
         f"• Memory: {memory_mb:.1f}MB / {MEMORY_LIMIT_MB}MB\n"
         f"• Memory Usage: {memory_percent:.1f}%\n"
@@ -1164,7 +1542,91 @@ async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle between parallel (fast) and sequential (reliable) modes"""
+    global USE_SEQUENTIAL_MODE
+    
+    USE_SEQUENTIAL_MODE = not USE_SEQUENTIAL_MODE
+    new_mode = "Sequential (Reliable)" if USE_SEQUENTIAL_MODE else "Parallel (Fast)"
+    
+    save_bot_state()
+    
+    await update.message.reply_text(
+        f"⚙️ **MODE CHANGED**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"New Mode: **{new_mode}**\n\n"
+        f"**Mode Details:**\n"
+        f"• Workers: {1 if USE_SEQUENTIAL_MODE else MAX_PARALLEL_CHECKS}\n"
+        f"• Speed: {'Slower but stable' if USE_SEQUENTIAL_MODE else 'Up to 5x faster'}\n"
+        f"• Memory: {'Lower usage' if USE_SEQUENTIAL_MODE else 'Higher usage'}\n"
+        f"• Best for: {'Stability' if USE_SEQUENTIAL_MODE else 'Speed'}\n\n"
+        f"{'⚠️ Restart monitoring for changes to take effect' if is_monitoring else '✅ Ready to use new mode'}",
+        parse_mode='Markdown'
+    )
+
+async def set_speed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set checking speed parameters"""
+    global CHECK_INTERVAL, MAX_PARALLEL_CHECKS, REACT_WAIT_TIME
+    
+    if not context.args:
+        await update.message.reply_text(
+            "⚡ **SPEED SETTINGS**\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"• Check Interval: {CHECK_INTERVAL}s\n"
+            f"• Parallel Workers: {MAX_PARALLEL_CHECKS}\n"
+            f"• React Wait: {REACT_WAIT_TIME}s\n"
+            f"• Mode: {'Sequential' if USE_SEQUENTIAL_MODE else 'Parallel'}\n\n"
+            "**Usage:**\n"
+            "`/speed fast` - Fast settings (5 workers, 10s interval)\n"
+            "`/speed normal` - Normal settings (5 workers, 30s interval)\n"
+            "`/speed slow` - Slow/Stable (3 workers, 60s interval)\n"
+            "`/speed custom <interval> <workers>` - Custom settings",
+            parse_mode='Markdown'
+        )
+        return
+    
+    preset = context.args[0].lower()
+    
+    if preset == "fast":
+        CHECK_INTERVAL = 10
+        MAX_PARALLEL_CHECKS = 8
+        REACT_WAIT_TIME = 3
+        settings = "Fast (10s interval, 8 workers, 3s React wait)"
+    elif preset == "normal":
+        CHECK_INTERVAL = 30
+        MAX_PARALLEL_CHECKS = 5
+        REACT_WAIT_TIME = 4
+        settings = "Normal (30s interval, 5 workers, 4s React wait)"
+    elif preset == "slow":
+        CHECK_INTERVAL = 60
+        MAX_PARALLEL_CHECKS = 3
+        REACT_WAIT_TIME = 6
+        settings = "Slow/Stable (60s interval, 3 workers, 6s React wait)"
+    elif preset == "custom" and len(context.args) >= 3:
+        try:
+            CHECK_INTERVAL = int(context.args[1])
+            MAX_PARALLEL_CHECKS = int(context.args[2])
+            settings = f"Custom ({CHECK_INTERVAL}s interval, {MAX_PARALLEL_CHECKS} workers)"
+        except ValueError:
+            await update.message.reply_text("❌ Invalid custom values. Use numbers only.")
+            return
+    else:
+        await update.message.reply_text("❌ Invalid preset. Use: fast, normal, slow, or custom")
+        return
+    
+    save_bot_state()
+    
+    await update.message.reply_text(
+        f"⚡ **SPEED UPDATED**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Settings: **{settings}**\n\n"
+        f"**New Values:**\n"
+        f"• Check Interval: {CHECK_INTERVAL}s\n"
+        f"• Parallel Workers: {MAX_PARALLEL_CHECKS}\n"
+        f"• React Wait: {REACT_WAIT_TIME}s\n\n"
+        f"{'⚠️ Restart monitoring for changes to take effect' if is_monitoring else '✅ Ready to use new settings'}",
+        parse_mode='Markdown'
+    )
     global is_monitoring
     
     if is_monitoring:
@@ -1212,15 +1674,15 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🚀 **MONITORING STARTED**\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"**⚡ TURBO MODE ACTIVE**\n"
+            f"**⚡ RELIABLE MODE ACTIVE**\n"
             f"• URLs: {len(monitored_urls)}\n"
-            f"• Parallel Checks: {MAX_PARALLEL_CHECKS}\n"
+            f"• Mode: {'Sequential (Reliable)' if USE_SEQUENTIAL_MODE else 'Parallel (Fast)'}\n"
             f"• Check Interval: Every {CHECK_INTERVAL}s\n"
             f"• Memory: {memory_mb:.1f}MB\n\n"
             f"**🔧 FEATURES ENABLED:**\n"
+            f"✅ Smart Content Filtering\n"
             f"✅ Driver Pooling ({MAX_DRIVER_POOL_SIZE}x)\n"
             f"✅ Content Caching ({CACHE_SIZE})\n"
-            f"✅ Parallel Processing\n"
             f"✅ Auto Memory Management\n"
             f"✅ Smart Retries\n\n"
             f"📊 Use `/status` for live stats\n"
@@ -1291,18 +1753,22 @@ async def stop_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def start_monitoring(bot):
-    """Main monitoring loop"""
+    """Main monitoring loop with dynamic mode selection"""
     global is_monitoring
+    
+    mode = "Parallel (Fast)" if not USE_SEQUENTIAL_MODE else "Sequential (Reliable)"
     
     await notification_queue.put((
         f"🟢 **MONITORING ACTIVE**\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"Tracking {len(monitored_urls)} URLs\n"
-        f"Turbo Mode: ON ⚡",
+        f"Mode: {mode}\n"
+        f"Workers: {MAX_PARALLEL_CHECKS if not USE_SEQUENTIAL_MODE else 1}\n"
+        f"Check Interval: {CHECK_INTERVAL}s",
         True
     ))
     
-    print("🚀 Starting turbo monitoring")
+    print(f"🚀 Starting monitoring ({mode})")
     cycle_count = 0
     
     while is_monitoring:
@@ -1310,14 +1776,27 @@ async def start_monitoring(bot):
             cycle_count += 1
             memory_mb = get_memory_usage()
             
-            print(f"\n🔄 Cycle #{cycle_count} | URLs: {len(monitored_urls)} | Memory: {memory_mb:.1f}MB")
+            print(f"\n{'='*60}")
+            print(f"🔄 MONITORING CYCLE #{cycle_count}")
+            print(f"📊 URLs: {len(monitored_urls)} | Memory: {memory_mb:.1f}MB | Mode: {mode}")
+            print(f"{'='*60}")
             
             start_time = time.time()
-            await check_urls_parallel(bot)
-            elapsed = time.time() - start_time
             
+            # Choose checking method based on mode
+            if USE_SEQUENTIAL_MODE:
+                await check_urls_sequential(bot)
+            else:
+                await check_urls_parallel(bot)
+            
+            elapsed = time.time() - start_time
+            urls_per_second = len(monitored_urls) / elapsed if elapsed > 0 else 0
             wait_time = max(CHECK_INTERVAL - elapsed, 1)
-            print(f"✅ Cycle completed in {elapsed:.2f}s, waiting {wait_time:.2f}s")
+            
+            print(f"\n📊 CYCLE STATS:")
+            print(f"  • Completed in: {elapsed:.2f}s")
+            print(f"  • Speed: {urls_per_second:.2f} URLs/second")
+            print(f"  • Next check in: {wait_time:.2f}s")
             
             await asyncio.sleep(wait_time)
             
@@ -1325,7 +1804,8 @@ async def start_monitoring(bot):
             print("🚫 Monitoring cancelled")
             break
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"❌ Error in monitoring cycle: {e}")
+            print(f"❌ Full traceback: {traceback.format_exc()}")
             await notification_queue.put((
                 f"⚠️ **Monitoring Error**\n{str(e)[:100]}",
                 False
@@ -1353,7 +1833,7 @@ async def auto_start_monitoring(application):
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"• Restored: {len(monitored_urls)} URLs\n"
                 f"• Memory: {get_memory_usage():.1f}MB\n"
-                f"• Mode: Turbo ⚡\n"
+                f"• Mode: {'Sequential' if USE_SEQUENTIAL_MODE else 'Parallel'}\n"
                 f"• Status: Active 🟢",
                 True
             ))
@@ -1381,10 +1861,10 @@ def cleanup_on_exit():
 def main():
     """Main function"""
     try:
-        print(f"🚀 ZEALY TURBO BOT v2.0")
+        print(f"🚀 ZEALY BOT v2.0 FIXED")
         print(f"📅 {datetime.now()}")
         print(f"💾 Memory: {MEMORY_LIMIT_MB}MB limit")
-        print(f"⚡ Turbo Mode: ENABLED")
+        print(f"⚡ Mode: {'Sequential (Reliable)' if USE_SEQUENTIAL_MODE else 'Parallel (Fast)'}")
         
         should_auto_restart = load_bot_state()
         
@@ -1420,8 +1900,11 @@ def main():
             CommandHandler("run", run_monitoring),
             CommandHandler("stop", stop_monitoring),
             CommandHandler("status", status),
+            CommandHandler("debug", debug_url),
             CommandHandler("clear", clear_cache),
-            CommandHandler("memory", memory_status)
+            CommandHandler("memory", memory_status),
+            CommandHandler("mode", toggle_mode),
+            CommandHandler("speed", set_speed)
         ]
         
         for handler in handlers:
