@@ -777,13 +777,11 @@ async def check_urls_parallel(bot):
     for change in changes_detected:
         notification = (
             f"🚨 **CHANGE DETECTED!**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
             f"📍 **URL:** {change['url']}\n"
             f"⚡ **Response Time:** {change['response_time']:.2f}s\n"
             f"📊 **Check #{change['check_count']}**\n"
             f"🔄 **Total changes:** {change['total_changes']}\n"
             f"🕐 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
-            f"━━━━━━━━━━━━━━━━━━"
         )
         await notification_queue.put((notification, True))
     
@@ -841,13 +839,11 @@ async def check_urls_sequential(bot):
     for change in changes_detected:
         notification = (
             f"🚨 **CHANGE DETECTED!**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
             f"📍 **URL:** {change['url']}\n"
             f"⚡ **Response Time:** {change['response_time']:.2f}s\n"
             f"📊 **Check #{change['check_count']}**\n"
             f"🔄 **Total changes:** {change['total_changes']}\n"
             f"🕐 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
-            f"━━━━━━━━━━━━━━━━━━"
         )
         await notification_queue.put((notification, True))
     
@@ -857,10 +853,8 @@ async def check_urls_sequential(bot):
             del monitored_urls[url]
             notification = (
                 f"🔴 **URL REMOVED**\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
                 f"📍 **URL:** {url}\n"
                 f"❌ **Reason:** Too many failures\n"
-                f"━━━━━━━━━━━━━━━━━━"
             )
             await notification_queue.put((notification, False))
     
@@ -939,7 +933,6 @@ async def start_monitoring(bot):
     
     await notification_queue.put((
         f"🟢 **MONITORING ACTIVE**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
         f"Tracking {len(monitored_urls)} URLs\n"
         f"Mode: {mode}\n"
         f"Check Interval: {CHECK_INTERVAL}s",
@@ -1131,7 +1124,7 @@ async def list_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    lines = ["📋 **MONITORED URLS**", "━━━━━━━━━━━━━━━━━━", ""]
+    lines = ["📋 **MONITORED URLS**"]
     
     for idx, (url, data) in enumerate(monitored_urls.items(), 1):
         status = "🟢" if data.failures == 0 else "🟡" if data.failures < FAILURE_THRESHOLD else "🔴"
@@ -1240,7 +1233,6 @@ async def debug_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             debug_text = (
                 f"🔍 **DEBUG RESULTS**\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
                 f"📍 {url}\n\n"
                 f"**Status:** {change_status}\n"
                 f"**Current Hash:** `{hash_result[:16]}...`\n"
@@ -1285,7 +1277,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status_text = (
         f"📊 **STATUS REPORT**\n"
-        f"━━━━━━━━━━━━━━━━━━\n\n"
         f"**📈 MONITORING**\n"
         f"• URLs: {len(monitored_urls)}/{MAX_URLS}\n"
         f"• Total Checks: {total_checks}\n"
@@ -1296,7 +1287,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Memory: {memory_mb:.1f}/{MEMORY_LIMIT_MB}MB\n"
         f"• Uptime: {hours}h {minutes}m\n"
         f"• Mode: {'Parallel' if not USE_SEQUENTIAL_MODE else 'Sequential'}\n"
-        f"━━━━━━━━━━━━━━━━━━"
     )
     
     await update.message.reply_text(status_text, parse_mode='Markdown')
@@ -1323,7 +1313,6 @@ async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"🧹 **CACHE CLEARED**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
         f"• Cache: {old_size} entries\n"
         f"• Drivers: {old_pool} closed\n"
         f"• Memory freed: {memory_before - memory_after:.1f}MB\n"
@@ -1343,12 +1332,10 @@ async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"💾 **MEMORY STATUS**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
         f"• RAM: {memory_mb:.1f}/{MEMORY_LIMIT_MB}MB\n"
         f"• Usage: {memory_percent:.1f}%\n"
         f"• Health: {health}\n"
-        f"• CPU: {cpu_percent:.1f}%\n"
-        f"━━━━━━━━━━━━━━━━━━",
+        f"• CPU: {cpu_percent:.1f}%\n",
         parse_mode='Markdown'
     )
 
@@ -1363,7 +1350,6 @@ async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"⚙️ **MODE CHANGED**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
         f"New Mode: **{new_mode}**\n"
         f"Workers: {1 if USE_SEQUENTIAL_MODE else MAX_PARALLEL_CHECKS}\n"
         f"{'⚠️ Restart monitoring for changes' if is_monitoring else '✅ Ready'}",
@@ -1377,7 +1363,6 @@ async def set_speed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "⚡ **SPEED SETTINGS**\n"
-            "━━━━━━━━━━━━━━━━━━\n"
             f"• Check Interval: {CHECK_INTERVAL}s\n"
             f"• Parallel Workers: {MAX_PARALLEL_CHECKS}\n"
             f"• React Wait: {REACT_WAIT_TIME}s\n"
@@ -1424,7 +1409,6 @@ async def set_speed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"⚡ **SPEED UPDATED**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
         f"Settings: **{settings}**\n\n"
         f"**New Values:**\n"
         f"• Check Interval: {CHECK_INTERVAL}s\n"
@@ -1469,11 +1453,9 @@ async def run_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             f"🚀 **MONITORING STARTED**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
             f"• URLs: {len(monitored_urls)}\n"
             f"• Mode: {'Sequential' if USE_SEQUENTIAL_MODE else 'Parallel'}\n"
-            f"• Interval: {CHECK_INTERVAL}s\n"
-            f"━━━━━━━━━━━━━━━━━━",
+            f"• Interval: {CHECK_INTERVAL}s",
             parse_mode='Markdown'
         )
         
@@ -1546,7 +1528,6 @@ async def auto_start_monitoring(application):
             
             await notification_queue.put((
                 f"🔄 **AUTO-RESTART**\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
                 f"Restored {len(monitored_urls)} URLs\n"
                 f"Memory: {get_memory_usage():.1f}MB",
                 True
